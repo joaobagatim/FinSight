@@ -8,9 +8,12 @@ version = "0.1.0"
 description = "FinSight API infrastructure"
 requires-python = ">=3.11"
 dependencies = [
+    "alembic>=1.16,<2",
     "fastapi>=0.115,<1",
     "pydantic>=2,<3",
     "pydantic-settings>=2,<3",
+    "SQLAlchemy>=2.0,<3",
+    "psycopg[binary]>=3.2,<4",
     "uvicorn>=0.30,<1",
 ]
 
@@ -31,6 +34,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra --strict-config --strict-markers"
 filterwarnings = ["error"]
+markers = ["postgres: integration tests using a dedicated temporary PostgreSQL database"]
 
 [tool.ruff]
 target-version = "py311"
@@ -38,6 +42,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-third-party = ["alembic"]
 
 [tool.pip-tools.compile]
 allow-unsafe = true

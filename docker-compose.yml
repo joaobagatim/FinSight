@@ -1,0 +1,25 @@
+name: finsight
+
+services:
+  postgres:
+    image: postgres:18.6-bookworm@sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${FINSIGHT_DB_NAME:-finsight}
+      POSTGRES_USER: ${FINSIGHT_DB_USER:-finsight}
+      POSTGRES_PASSWORD: ${FINSIGHT_DB_PASSWORD:?Set FINSIGHT_DB_PASSWORD in the local .env file}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    ports:
+      - "127.0.0.1:${FINSIGHT_DB_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    stop_grace_period: 30s
+
+volumes:
+  postgres_data:
