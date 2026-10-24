@@ -1,1 +1,91 @@
-README_CODEX.md
+# Local Codex documentation
+/README_CODEX.md
+/docs/DEVLOG.md
+/docs/SESSION_STATE.md
+/docs/setup.md
+
+# Secrets, credentials and local configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Python / FastAPI
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# React / Vite / Node
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/cache/
+.vite/
+.next/
+coverage/
+*.tsbuildinfo
+
+# Playwright output and authentication state
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+playwright/.auth/
+*.trace.zip
+
+# Databases, backups and raw financial data
+*.sqlite
+*.sqlite3
+*.db
+*.sql.gz
+*.dump
+*.backup
+backups/
+database/backups/
+postgres_data/
+pgdata/
+private/
+private_data/
+sensitive_data/
+uploads/
+storage/private/
+data/raw/
+*.ofx
+*.qif
+
+# Temporary files and logs
+*.pid
+*.log
+logs/
+tmp/
+temp/
+.cache/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+*.swp
+*.swo
+*~
