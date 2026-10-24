@@ -123,7 +123,7 @@ Essa opção cria e remove somente um banco temporário próprio com nome aleat�
 e recusa ambiente de produção, host remoto ou porta 5432. Não altera as tabelas do
 banco de desenvolvimento. O nome desse banco temporário não deve ser configurado
 manualmente. Os testes verificam conexão, readiness, credenciais inválidas, liberação
-de conexões e timeouts da sessão. Alembic permanece para a próxima unidade.
+de conexões, timeouts da sessão e o ciclo de migrações Alembic em banco isolado.
 
 Se o Pytest encontrar erro de permissão no temporário padrão do Windows, use uma
 pasta de testes exclusiva dentro do projeto, que já está ignorada:
@@ -136,3 +136,56 @@ $env:PYTEST_DEBUG_TEMPROOT = $taskPytestTemp
 
 Depois repita o comando Pytest desejado nesse terminal. A variável vale somente
 para o terminal atual; o Pytest gerencia seus subdiretórios numerados de teste.
+
+## Migrações Alembic
+
+O Alembic utiliza as mesmas variáveis `FINSIGHT_DB_*` da API e lê o `.env` da
+raiz. Não coloque senha ou URL de conexão em `alembic.ini`. Instale as dependências
+atualizadas e mantenha o PostgreSQL ativo antes de executar os comandos online.
+Na raiz do repositório:
+
+```powershell
+backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini heads
+backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini current
+backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini upgrade head
+backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini current
+backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini check
+```
+
+`upgrade head` modifica o banco indicado pela configuração local. A revisão
+`0001_phase0` é uma base vazia: cria somente o controle técnico `alembic_version`,
+sem tabelas financeiras. Repetir o upgrade mantém a mesma revisão. A aplicação
+não executa migrações automaticamente ao iniciar. `check` compara o banco com
+`Base.metadata`, atualmente vazio; tabelas criadas manualmente também podem ser
+identificadas como divergências. Revise qualquer migração gerada antes de aplicá-la.
+
+Para visualizar o SQL sem abrir conexão ou ler credenciais:
+
+```powershell
+backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini upgrade head --sql
+```
+
+Depois de aplicar a revisão, consulte no DBeaver, na conexão PostgreSQL correta:
+
+```sql
+SELECT current_database();
+SELECT version_num FROM public.alembic_version;
+SELECT table_name FROM information_schema.tables
+WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+ORDER BY table_name;
+```
+
+Resultado esperado em um banco inicialmente vazio: nome do banco configurado,
+uma linha `0001_phase0` e somente a tabela `alembic_version`. Antes do primeiro
+upgrade, essa tabela ainda não existe. As consultas acima são somente de leitura.
+
+O rollback de teste é `downgrade base`: nesta revisão vazia, remove a linha de
+versão e mantém a tabela técnica vazia. Migrações futuras podem remover tabelas
+ou dados no downgrade; revise-as antes de executar rollback em bancos com dados.
+Os testes `--run-postgres` validam upgrade, downgrade e detecção de divergência
+somente em seu banco temporário próprio, preservando o banco de desenvolvimento.
+
+Para alterar o esquema no futuro, importe os models em `alembic/env.py`, gere uma
+revisão com `revision --autogenerate -m "describe schema change"`, revise o arquivo
+em `backend/alembic/versions/` e só então aplique `upgrade head`. Ainda não há models
+de domínio nesta fase. Consulte o [tutorial oficial do Alembic](https://alembic.sqlalchemy.org/en/latest/tutorial.html).
