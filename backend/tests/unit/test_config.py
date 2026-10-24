@@ -68,3 +68,40 @@ def test_production_accepts_explicit_https_origin():
     )
 
     assert str(settings.cors_origins[0]) == "https://example.test/"
+
+
+@pytest.mark.parametrize("password", ["", "   ", "replace-with-a-long-random-local-password"])
+def test_empty_or_example_database_password_is_rejected(password):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, db_password=password)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"db_port": 0},
+        {"db_port": 65536},
+        {"db_connect_timeout": 0},
+        {"db_pool_timeout": 0},
+        {"db_statement_timeout_ms": 0},
+        {"db_host": ""},
+        {"db_name": ""},
+        {"db_user": ""},
+    ],
+)
+def test_invalid_database_settings_are_rejected(values):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **values)
+
+
+def test_validation_errors_hide_raw_database_password():
+    marker = "synthetic-secret-marker"
+    with pytest.raises(ValidationError) as error:
+        Settings(
+            _env_file=None,
+            environment="production",
+            cors_origins=["http://example.test"],
+            db_password=marker,
+        )
+
+    assert marker not in str(error.value)

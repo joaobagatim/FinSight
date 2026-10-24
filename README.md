@@ -70,5 +70,69 @@ já inicializado. Alterar a senha exige uma operação SQL explícita; não remo
 volume para corrigir credenciais. O usuário configurado pela imagem oficial é o
 administrador desse banco local; produção exigirá papéis e permissões próprios.
 
-A conexão da aplicação com o banco, SQLAlchemy e Alembic serão configurados nas
-próximas unidades. Por enquanto, `GET /health` continua verificando somente a API.
+## Conexão da API e prontidão do banco
+
+Após instalar as dependências atualizadas e iniciar o PostgreSQL, a API lê os
+parâmetros `FINSIGHT_DB_*` do `.env` da raiz. Não é necessário montar uma URL com
+senha manualmente. SQLAlchemy e psycopg abrem conexões sob demanda; o pool é
+encerrado ao desligar a aplicação. Não são criadas tabelas automaticamente.
+
+```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:8000/health
+Invoke-RestMethod -Uri http://127.0.0.1:8000/health/ready
+```
+
+| Endpoint | Resultado |
+|---|---|
+| `GET /health` | HTTP 200 e `{"status":"ok"}`; disponibilidade da API |
+| `GET /health/ready` | HTTP 200 e `{"status":"ok","database":"ok"}` quando `SELECT 1` passa |
+| `GET /health/ready` | HTTP 503 e `{"status":"unavailable","database":"unavailable"}` se o banco não responder ou a senha não estiver configurada |
+
+A ausência de senha mantém o processo disponível, mas sem prontidão do banco.
+Senha vazia/placeholder e parâmetros inválidos são rejeitados na configuração.
+Respostas e logs da prontidão não incluem detalhes da exceção ou credenciais.
+Esse endpoint é público, executa somente uma consulta simples e não deve ser
+usado como autorização de recursos financeiros. Credenciais/TLS de produção
+continuam exigindo configuração específica para o ambiente.
+
+Os limites padrão são 3 segundos para conexão e espera do pool, e 3000 ms para
+comandos SQL, configuráveis pelas variáveis de timeout do `.env.example`. O pool
+é limitado a cinco conexões mantidas e cinco adicionais por processo. Conexões
+retiradas do pool são verificadas antes do uso, e sessões usam fuso UTC.
+
+## Testes do backend
+
+Na raiz do repositório, execute:
+
+```powershell
+backend/.venv/Scripts/python.exe -m pytest -c backend/pyproject.toml backend/tests
+backend/.venv/Scripts/python.exe -m ruff check backend
+backend/.venv/Scripts/python.exe -m ruff format --check backend
+```
+
+Os testes reais de PostgreSQL são opcionais no comando acima e aparecem como
+ignorados. Para executá-los, mantenha o banco Docker ativo e o `.env` local
+configurado; acrescente `--run-postgres`:
+
+```powershell
+backend/.venv/Scripts/python.exe -m pytest -c backend/pyproject.toml backend/tests --run-postgres
+```
+
+Essa opção cria e remove somente um banco temporário próprio com nome aleatório
+`finsight_test_*`. Exige permissão de criação de banco, usa somente dados sintéticos
+e recusa ambiente de produção, host remoto ou porta 5432. Não altera as tabelas do
+banco de desenvolvimento. O nome desse banco temporário não deve ser configurado
+manualmente. Os testes verificam conexão, readiness, credenciais inválidas, liberação
+de conexões e timeouts da sessão. Alembic permanece para a próxima unidade.
+
+Se o Pytest encontrar erro de permissão no temporário padrão do Windows, use uma
+pasta de testes exclusiva dentro do projeto, que já está ignorada:
+
+```powershell
+$taskPytestTemp = Join-Path (Get-Location).Path 'backend/.cache/pytest-temp'
+New-Item -ItemType Directory -Path $taskPytestTemp -Force | Out-Null
+$env:PYTEST_DEBUG_TEMPROOT = $taskPytestTemp
+```
+
+Depois repita o comando Pytest desejado nesse terminal. A variável vale somente
+para o terminal atual; o Pytest gerencia seus subdiretórios numerados de teste.

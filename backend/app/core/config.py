@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, field_validator, model_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -15,10 +15,31 @@ class Settings(BaseSettings):
         env_file=ROOT_DIR / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     environment: Literal["development", "test", "production"] = "development"
     cors_origins: list[AnyHttpUrl] = []
+    db_host: str = Field(default="localhost", min_length=1)
+    db_port: int = Field(default=5433, ge=1, le=65535)
+    db_name: str = Field(default="finsight", min_length=1)
+    db_user: str = Field(default="finsight", min_length=1)
+    db_password: SecretStr | None = Field(default=None, exclude=True, repr=False)
+    db_connect_timeout: int = Field(default=3, ge=1, le=30)
+    db_pool_timeout: int = Field(default=3, ge=1, le=30)
+    db_statement_timeout_ms: int = Field(default=3000, ge=100, le=30000)
+
+    @field_validator("db_password")
+    @classmethod
+    def validate_database_password(cls, password: SecretStr | None) -> SecretStr | None:
+        if password is not None and (
+            not password.get_secret_value().strip()
+            or password.get_secret_value() == "replace-with-a-long-random-local-password"
+        ):
+            raise ValueError(
+                "Set a database password instead of an empty value or example placeholder"
+            )
+        return password
 
     @field_validator("cors_origins")
     @classmethod
