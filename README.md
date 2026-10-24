@@ -32,7 +32,7 @@ interface local. Encerre o processo com `Ctrl+C`.
 A página inicial apresenta o projeto e indica que as funcionalidades financeiras
 ainda estão em desenvolvimento. Ela funciona independentemente da API e do banco;
 não faz requisições financeiras nem usa dados reais. Não há autenticação nesta
-unidade. Tailwind CSS e shadcn/ui serão configurados na próxima unidade.
+unidade. Tailwind CSS e os componentes locais shadcn/ui formam a base visual.
 
 Verificações e build:
 
@@ -49,6 +49,35 @@ de produção. Use `npm --prefix frontend run format` para aplicar a formataçã
 O `package-lock.json` é versionado; use `npm ci` para reproduzir as dependências.
 Nenhum segredo deve ser incluído no frontend: código e variáveis `VITE_*` são
 públicos no navegador. Esta página ainda não exige variáveis de ambiente.
+
+### Tailwind CSS e shadcn/ui
+
+Tailwind CSS 4 utiliza o plugin `@tailwindcss/vite` e o import em
+`frontend/src/index.css`; não exige um `tailwind.config.js` nesta configuração.
+O mesmo CSS define os tokens de cor usados por utilitários e componentes.
+A interface atual utiliza o tema claro do FinSight; não há troca de tema nesta unidade.
+
+Os componentes shadcn/ui ficam no código-fonte em `frontend/src/components/ui/`.
+`Button` compõe o link de navegação usando `asChild`, preservando a semântica de
+âncora; `Badge` apresenta o estado de desenvolvimento. O helper `cn`, em
+`frontend/src/lib/utils.js`, combina classes condicionais e resolve conflitos
+entre utilitários Tailwind. O alias `@/` aponta para `frontend/src`, configurado
+tanto no Vite quanto no `jsconfig.json`.
+
+`frontend/components.json` mantém `tsx: false` e `rsc: false`, com componentes
+JavaScript/JSX e estilo `new-york`. Para adicionar outro componente no futuro:
+
+```powershell
+Set-Location frontend
+npx --yes shadcn@4.22.1 add nome-do-componente
+```
+
+Revise os arquivos e dependências gerados antes de incluí-los no Git. A CLI
+fixada ainda consulta o registro remoto; o código já gerado é preservado no
+repositório. Não é necessário executar a CLI durante `npm ci`, build ou uso da
+aplicação. Consulte as instruções oficiais de
+[Tailwind com Vite](https://tailwindcss.com/docs/installation/using-vite) e
+[shadcn/ui em JavaScript](https://ui.shadcn.com/docs/javascript).
 
 ## PostgreSQL local e DBeaver
 

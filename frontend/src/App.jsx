@@ -1,4 +1,6 @@
 import BrandMark from './components/BrandMark.jsx'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 
 const possibilities = [
   {
@@ -20,7 +22,7 @@ const possibilities = [
 
 export default function App() {
   return (
-    <div className="app-shell">
+    <div className="app-shell min-h-screen">
       <a className="skip-link" href="#conteudo">
         Pular para o conteúdo
       </a>
@@ -32,9 +34,11 @@ export default function App() {
             FinSight<span className="brand-dot">.</span>
           </span>
         </a>
-        <a className="about-link" href="#sobre">
-          Sobre o projeto <span aria-hidden="true">↗</span>
-        </a>
+        <Button asChild variant="ghost" size="sm" className="about-link">
+          <a href="#sobre">
+            Sobre o projeto <span aria-hidden="true">↗</span>
+          </a>
+        </Button>
       </header>
 
       <main id="conteudo" tabIndex={-1}>
@@ -47,12 +51,12 @@ export default function App() {
             Cada escolha conta. Estamos construindo um espaço para você entender seu dinheiro,
             organizar o presente e planejar o que vem pela frente.
           </p>
-          <div className="development-note">
+          <Badge variant="outline" className="development-note">
             <span className="status-dot" aria-hidden="true" />
             <span>
               Em desenvolvimento <span aria-hidden="true">·</span> Este é só o começo
             </span>
-          </div>
+          </Badge>
           <span className="hero-decoration" aria-hidden="true">
             F
           </span>
