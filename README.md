@@ -15,6 +15,41 @@ backend/.venv/Scripts/python.exe -m pip install --require-hashes -r backend/requ
 backend/.venv/Scripts/python.exe -m uvicorn app.main:create_app --factory --app-dir backend --host 127.0.0.1 --port 8000 --reload
 ```
 
+## Frontend local
+
+Requisitos: Node.js 24.x e npm 11.x. O frontend utiliza React com JavaScript/JSX
+e Vite. Na raiz do repositório:
+
+```powershell
+npm --prefix frontend ci
+npm --prefix frontend run dev
+```
+
+Abra `http://127.0.0.1:5173`. A porta é fixa: se estiver ocupada, o servidor
+informa o conflito em vez de escolher outra porta. O acesso fica restrito à
+interface local. Encerre o processo com `Ctrl+C`.
+
+A página inicial apresenta o projeto e indica que as funcionalidades financeiras
+ainda estão em desenvolvimento. Ela funciona independentemente da API e do banco;
+não faz requisições financeiras nem usa dados reais. Não há autenticação nesta
+unidade. Tailwind CSS e shadcn/ui serão configurados na próxima unidade.
+
+Verificações e build:
+
+```powershell
+npm --prefix frontend run lint
+npm --prefix frontend run format:check
+npm --prefix frontend run build
+npm --prefix frontend run preview
+```
+
+O build gera `frontend/dist`, ignorado pelo Git. O preview fica em
+`http://127.0.0.1:4173` e serve para conferir o build local, não para hospedagem
+de produção. Use `npm --prefix frontend run format` para aplicar a formatação.
+O `package-lock.json` é versionado; use `npm ci` para reproduzir as dependências.
+Nenhum segredo deve ser incluído no frontend: código e variáveis `VITE_*` são
+públicos no navegador. Esta página ainda não exige variáveis de ambiente.
+
 ## PostgreSQL local e DBeaver
 
 O banco de desenvolvimento roda pelo Docker Compose. Requisitos: Docker Desktop
