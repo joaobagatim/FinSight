@@ -1,0 +1,11 @@
+node_modules/
+frontend/
+backend/
+.cache/
+playwright-report/
+test-results/
+package-lock.json
+README_CODEX.md
+docs/DEVLOG.md
+docs/SESSION_STATE.md
+docs/setup.md
