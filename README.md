@@ -130,9 +130,43 @@ nesses testes ou publique os artefatos sem revisar seu conteúdo.
 Playwright transforma os arquivos para execução sem fazer essa verificação.
 Use `npm run format` para formatar os arquivos de automação. O lint/formato da
 raiz cobre apenas essa infraestrutura; o frontend mantém seus próprios comandos
-com `npm --prefix frontend run ...`. Integração GitHub Actions será configurada em
-uma entrega posterior. Referências: [webServer](https://playwright.dev/docs/test-webserver)
+com `npm --prefix frontend run ...`. Referências: [webServer](https://playwright.dev/docs/test-webserver)
 e [TypeScript](https://playwright.dev/docs/test-typescript) do Playwright.
+
+## Integração contínua com GitHub Actions
+
+O workflow `.github/workflows/ci.yml` executa em PRs destinados à `main`, pushes
+na `main` e acionamento manual pela aba **Actions**. São três jobs independentes
+em Ubuntu 24.04, com Node 24/npm 11.11.0 e Python 3.11 conforme necessário:
+
+| Check | Verificações |
+|---|---|
+| Backend checks | Instalação com hashes, Ruff, formatação e Pytest com PostgreSQL |
+| Frontend checks | Instalação pelo lockfile, ESLint, formatação e build |
+| Playwright checks | Tipos/lint/formato, build/preview, API isolada e testes Chromium |
+
+O job de backend cria um serviço PostgreSQL 18.6 descartável no runner, com
+credencial sintética exclusiva de CI e porta 5433. A fixture cria/remove somente
+seu banco temporário próprio. Nenhum acesso ao PostgreSQL do seu Windows ou ao
+seu `.env` local é necessário; esses dados não são enviados para o GitHub.
+
+O job Playwright utiliza a API sem banco configurado, conforme descrito acima.
+Ele instala o Chromium do Playwright e suas dependências de sistema no runner.
+O workflow utiliza permissões de leitura, actions fixadas por SHA e cache de
+downloads baseado nos lockfiles. Novas execuções cancelam as anteriores da mesma
+branch ou PR. Não há deploy ou merge automático configurado.
+
+Após publicar o workflow e abrir o PR, acompanhe cada check no próprio PR ou na
+aba **Actions**. Abra um job para consultar a etapa que falhou. Relatórios Pytest
+e Playwright são retidos como artefatos por sete dias quando disponíveis; dados
+usados nos testes devem continuar fictícios.
+
+O status dos checks auxilia a revisão. Exigir aprovação dos checks antes do
+merge depende de uma regra de proteção da `main`, configurada separadamente.
+O arquivo do workflow e as validações locais não comprovam uma execução remota:
+o resultado real só pode ser confirmado após uma execução no GitHub.
+Referências: [GitHub Actions](https://docs.github.com/en/actions/get-started/understand-github-actions)
+e [CI do Playwright](https://playwright.dev/docs/ci-intro).
 
 ## PostgreSQL local e DBeaver
 
