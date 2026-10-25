@@ -79,6 +79,61 @@ aplicação. Consulte as instruções oficiais de
 [Tailwind com Vite](https://tailwindcss.com/docs/installation/using-vite) e
 [shadcn/ui em JavaScript](https://ui.shadcn.com/docs/javascript).
 
+## Automação com Playwright e TypeScript
+
+A suíte permanente da raiz utiliza Playwright Test com TypeScript, separado do
+frontend JavaScript/JSX. Requisitos: Node 24.x, npm 11.x e o ambiente Python
+`backend/.venv` com as dependências do backend instaladas conforme o início deste
+README. Execute na raiz:
+
+```powershell
+npm ci
+npm --prefix frontend ci
+npx playwright install chromium
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+```
+
+O primeiro download do Chromium é feito para o cache de navegadores do usuário.
+O projeto utiliza o Chromium distribuído pelo Playwright; a instalação de
+Chrome/Edge no Windows não substitui esse passo.
+
+O Playwright inicia o build/preview do frontend em `127.0.0.1:4175` e uma API
+temporária em `127.0.0.1:8001`, encerrando os processos ao terminar. As portas
+precisam estar livres: servidores existentes não são reutilizados. A suíte
+verifica a página renderizada, teclado, navegação e layouts de 320/390/1280 px,
+além dos contratos HTTP de saúde, prontidão, OpenAPI e resposta 404.
+
+A API de testes utiliza a fábrica real com settings isolados: não lê o `.env`,
+remove variáveis `FINSIGHT_*` somente do processo filho e não abre conexão com
+PostgreSQL. Por isso, `/health` retorna 200 e `/health/ready` retorna 503 nesta
+suíte. Esses resultados não indicam falha do banco de desenvolvimento. Os testes
+reais de banco continuam no Pytest com a opção explícita `--run-postgres`.
+
+Comandos específicos:
+
+```powershell
+npm run test:api
+npm run test:e2e
+npm run test:report
+```
+
+Os comandos por projeto também inicializam os dois servidores configurados.
+`test:report` abre o último relatório HTML. Resultados JSON ficam em
+`test-results/results.json` e HTML em `playwright-report/`; ambos ignorados pelo
+Git. Screenshots e traces são retidos somente em falhas. Não utilize dados reais
+nesses testes ou publique os artefatos sem revisar seu conteúdo.
+
+`npm run typecheck` executa a verificação TypeScript separadamente, pois o
+Playwright transforma os arquivos para execução sem fazer essa verificação.
+Use `npm run format` para formatar os arquivos de automação. O lint/formato da
+raiz cobre apenas essa infraestrutura; o frontend mantém seus próprios comandos
+com `npm --prefix frontend run ...`. Integração GitHub Actions será configurada em
+uma entrega posterior. Referências: [webServer](https://playwright.dev/docs/test-webserver)
+e [TypeScript](https://playwright.dev/docs/test-typescript) do Playwright.
+
 ## PostgreSQL local e DBeaver
 
 O banco de desenvolvimento roda pelo Docker Compose. Requisitos: Docker Desktop
