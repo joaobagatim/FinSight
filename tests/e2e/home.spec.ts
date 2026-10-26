@@ -54,3 +54,19 @@ test('home remains usable on narrow and desktop viewports', async ({ page }) => 
     expect(hasOverflow, `Horizontal overflow at ${width}px`).toBe(false)
   }
 })
+
+test('header keeps navigation inside its container with wider fallback fonts', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 900 })
+  await page.goto('/')
+  await page.addStyleTag({ content: ':root { font-family: monospace; }' })
+
+  const header = await page.locator('.site-header').boundingBox()
+  expect(header).not.toBeNull()
+  for (const link of await page.locator('.site-header a').all()) {
+    await expect(link).toBeVisible()
+    const bounds = await link.boundingBox()
+    expect(bounds).not.toBeNull()
+    expect(bounds!.x).toBeGreaterThanOrEqual(header!.x)
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(header!.x + header!.width)
+  }
+})
