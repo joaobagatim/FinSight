@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.config import Settings
 from app.db.base import Base
 from app.db.session import Database
+from app.models import User, UserSession  # noqa: F401 -- register model metadata
 
 config = context.config
 target_metadata = Base.metadata

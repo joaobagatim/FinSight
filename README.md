@@ -4,8 +4,9 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 
 ## Desenvolvimento
 
-O projeto está na Fase 0, de preparação da infraestrutura. As funcionalidades
-financeiras descritas acima fazem parte do escopo planejado.
+A infraestrutura da Fase 0 está implementada. A primeira etapa da Fase 1 adiciona
+modelos e migração de usuários/sessões; cadastro e autenticação ainda serão implementados.
+As funcionalidades financeiras descritas acima fazem parte do escopo planejado.
 
 A API inicial oferece `GET /health`. Execute na raiz do repositório:
 
@@ -306,10 +307,11 @@ backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini check
 ```
 
 `upgrade head` modifica o banco indicado pela configuração local. A revisão
-`0001_phase0` é uma base vazia: cria somente o controle técnico `alembic_version`,
-sem tabelas financeiras. Repetir o upgrade mantém a mesma revisão. A aplicação
+`0001_phase0` é uma base vazia; `0002_identity`, construída sobre ela, cria
+`users` e `user_sessions`, além do controle técnico `alembic_version`.
+Não há tabelas financeiras nesta etapa. Repetir o upgrade mantém a mesma revisão. A aplicação
 não executa migrações automaticamente ao iniciar. `check` compara o banco com
-`Base.metadata`, atualmente vazio; tabelas criadas manualmente também podem ser
+`Base.metadata`, com usuários e sessões; tabelas criadas manualmente também podem ser
 identificadas como divergências. Revise qualquer migração gerada antes de aplicá-la.
 
 Para visualizar o SQL sem abrir conexão ou ler credenciais:
@@ -328,17 +330,52 @@ WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
 ORDER BY table_name;
 ```
 
-Resultado esperado em um banco inicialmente vazio: nome do banco configurado,
-uma linha `0001_phase0` e somente a tabela `alembic_version`. Antes do primeiro
-upgrade, essa tabela ainda não existe. As consultas acima são somente de leitura.
+Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
+`0002_identity` e as tabelas `alembic_version`, `users` e `user_sessions`.
+Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
+são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
-O rollback de teste é `downgrade base`: nesta revisão vazia, remove a linha de
-versão e mantém a tabela técnica vazia. Migrações futuras podem remover tabelas
-ou dados no downgrade; revise-as antes de executar rollback em bancos com dados.
+O rollback de teste `downgrade 0001_phase0` remove as tabelas de identidade e
+seus registros. `downgrade base` também remove a linha de versão, mantendo a
+tabela técnica vazia. Não execute rollback em bancos com dados sem revisão e
+autorização específica; estes comandos são exercitados apenas no banco de teste.
 Os testes `--run-postgres` validam upgrade, downgrade e detecção de divergência
 somente em seu banco temporário próprio, preservando o banco de desenvolvimento.
 
-Para alterar o esquema no futuro, importe os models em `alembic/env.py`, gere uma
+Para alterar o esquema no futuro, registre os models em `app.models`, gere uma
 revisão com `revision --autogenerate -m "describe schema change"`, revise o arquivo
-em `backend/alembic/versions/` e só então aplique `upgrade head`. Ainda não há models
-de domínio nesta fase. Consulte o [tutorial oficial do Alembic](https://alembic.sqlalchemy.org/en/latest/tutorial.html).
+em `backend/alembic/versions/` e só então aplique `upgrade head`. O Alembic importa
+os modelos explicitamente; iniciar a API não cria tabelas nem executa migrações.
+Consulte o [tutorial oficial do Alembic](https://alembic.sqlalchemy.org/en/latest/tutorial.html).
+
+### Persistência inicial de identidade
+
+Os modelos SQLAlchemy `User` e `UserSession` usam UUID v4 gerado pela aplicação,
+e timestamps PostgreSQL com fuso. A sessão do banco usa UTC. `updated_at` é
+atualizado pelas operações SQLAlchemy; não há trigger para atualizações SQL manuais.
+O ORM normaliza e-mail com remoção de espaços nas extremidades e minúsculas;
+o banco exige essa forma normalizada e unicidade, inclusive em escritas diretas.
+Validação completa de e-mail e hashing Argon2id serão responsabilidades do cadastro.
+
+As sessões referenciam um usuário, exigem hash de refresh único e expiração
+posterior à criação. Revogação e último uso são opcionais e não podem anteceder
+a criação. Os campos armazenam hashes; ainda não existe serviço que gere,
+valide ou renove tokens. O schema não verifica criptograficamente um hash.
+A exclusão de um usuário com sessões é recusada pelo banco, sem cascade automático.
+
+Para inspecionar a estrutura no DBeaver sem consultar hashes ou dados pessoais:
+
+```sql
+SELECT table_name, column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name IN ('users', 'user_sessions')
+ORDER BY table_name, ordinal_position;
+
+SELECT table_name, constraint_name, constraint_type
+FROM information_schema.table_constraints
+WHERE table_schema = 'public' AND table_name IN ('users', 'user_sessions')
+ORDER BY table_name, constraint_name;
+```
+
+Espera-se ver as colunas de identidade/sessão, datas com fuso, chaves primárias,
+unicidade e a FK da sessão para o usuário. Nenhuma destas consultas modifica dados.

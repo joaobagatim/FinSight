@@ -15,11 +15,12 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 CONFIG_PATH = BACKEND_DIR / "alembic.ini"
 
 
-def test_revision_graph_has_one_empty_baseline():
+def test_revision_graph_preserves_baseline_and_has_one_identity_head():
     script = ScriptDirectory.from_config(Config(str(CONFIG_PATH)))
-    assert script.get_heads() == ["0001_phase0"]
+    assert script.get_heads() == ["0002_identity"]
     assert script.get_bases() == ["0001_phase0"]
-    assert script.get_revision("head").down_revision is None
+    assert script.get_revision("0001_phase0").down_revision is None
+    assert script.get_revision("head").down_revision == "0001_phase0"
 
 
 def test_template_generates_an_importable_revision_outside_the_repository(tmp_path):
@@ -28,7 +29,7 @@ def test_template_generates_an_importable_revision_outside_the_repository(tmp_pa
     config = Config(str(CONFIG_PATH))
     config.set_main_option("script_location", str(scripts))
     revision = command.revision(config, message="synthetic template probe", rev_id="template_probe")
-    assert revision.down_revision == "0001_phase0"
+    assert revision.down_revision == "0002_identity"
     assert callable(revision.module.upgrade)
     assert callable(revision.module.downgrade)
     assert ScriptDirectory.from_config(config).get_heads() == ["template_probe"]
@@ -55,7 +56,9 @@ def test_offline_sql_is_independent_of_cwd_database_and_credentials(tmp_path, wo
     assert "CREATE TABLE alembic_version" in result.stdout
     assert "0001_phase0" in result.stdout
     assert "COMMIT;" in result.stdout
-    assert result.stdout.count("CREATE TABLE") == 1
+    assert "CREATE TABLE users" in result.stdout
+    assert "CREATE TABLE user_sessions" in result.stdout
+    assert result.stdout.count("CREATE TABLE") == 3
     assert marker not in result.stdout + result.stderr
     assert "invalid.invalid" not in result.stdout + result.stderr
 
