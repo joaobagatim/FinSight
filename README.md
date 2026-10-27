@@ -6,7 +6,7 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 
 A infraestrutura da Fase 0 está implementada. A Fase 1 adiciona modelos e migrações
 de usuários, sessões, contas, categorias, prévias de importação,
-transações e transferências;
+transações, transferências, metas e alocações;
 cadastro e autenticação ainda serão implementados.
 As funcionalidades financeiras descritas acima fazem parte do escopo planejado.
 
@@ -313,12 +313,14 @@ backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini check
 `0003_accounts_categories` acrescenta `accounts` e `categories`;
 `0004_imports` cria `import_jobs` e `import_rows`;
 `0005_transactions_transfers` cria `transactions`/`transfers` e acrescenta
-a chave composta de proprietário/id/tipo em categorias, além do controle técnico
-`alembic_version`. Os demais modelos serão adicionados em unidades seguintes.
+a chave composta de proprietário/id/tipo em categorias;
+`0006_goals_allocations` cria `financial_goals` e `goal_allocations`.
+O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
+domínio estão modeladas; autenticação e autorização HTTP ainda serão implementadas.
 Repetir o upgrade mantém a mesma revisão. A aplicação
 não executa migrações automaticamente ao iniciar. `check` compara o banco com
-`Base.metadata`, com identidade, contas, categorias, importações, transações e
-transferências; tabelas manuais podem ser identificadas como divergências.
+`Base.metadata`, com identidade, contas, categorias, importações, transações,
+transferências, metas e alocações; tabelas manuais podem ser identificadas como divergências.
 Revise qualquer migração gerada antes de aplicá-la.
 
 Para visualizar o SQL sem abrir conexão ou ler credenciais:
@@ -338,13 +340,14 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0005_transactions_transfers` e as nove tabelas `alembic_version`, `users`,
+`0006_goals_allocations` e as onze tabelas `alembic_version`, `users`,
 `user_sessions`, `accounts`, `categories`, `import_jobs`, `import_rows`,
-`transactions` e `transfers`.
+`transactions`, `transfers`, `financial_goals` e `goal_allocations`.
 Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
 são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
-O rollback de teste `downgrade 0004_imports` remove transações/transferências e a
+O rollback de teste `downgrade 0005_transactions_transfers` remove metas/alocações,
+preservando as tabelas anteriores. `downgrade 0004_imports` remove também transações/transferências e a
 chave técnica de categoria/tipo acrescentada nesta revisão, preservando os dados
 das tabelas anteriores. `downgrade 0003_accounts_categories` remove também jobs/linhas,
 preservando identidade, contas e categorias. `downgrade 0002_identity` remove também contas/categorias, preservando
@@ -547,5 +550,55 @@ ORDER BY table_name, constraint_name;
 SELECT tablename, indexname, indexdef
 FROM pg_indexes
 WHERE schemaname = 'public' AND tablename IN ('transactions', 'transfers')
+ORDER BY tablename, indexname;
+```
+
+### Persistência de metas e alocações
+
+`FinancialGoal` guarda proprietário, nome obrigatório, descrição opcional,
+valor-alvo positivo em `NUMERIC(15,2)`/`Decimal`, prazo opcional e estado explícito
+(`active`, `completed`, `cancelled`). Nomes de metas podem se repetir. O prazo é
+uma data e pode representar uma referência passada. A meta usa UUIDv4 e timestamps
+UTC; `updated_at` é atualizado pelo ORM, sem trigger para SQL manual.
+
+`GoalAllocation` guarda um movimento de reserva (valor positivo) ou retirada
+(valor negativo), com proprietário, meta, conta, data, notas opcionais e criação
+UTC. O valor exige `Decimal` finito, diferente de zero, dentro da faixa de
+`NUMERIC(15,2)` e exato em centavos no ORM. `float`, zero, não finitos e frações
+menores que um centavo são rejeitados. SQL direto mantém coerção/arredondamento
+nativos do PostgreSQL. O validador positivo das transações/transferências é preservado.
+
+FKs compostas exigem meta e conta do mesmo proprietário. Atribuir uma meta ou conta
+pelo ORM escreve somente a referência, preservando o proprietário explicitamente
+informado. Exclusões de entidades referenciadas são restritas, sem cascade
+destrutivo. Persistir alocação não cria receita/despesa/transferência, não altera
+saldo de abertura e não muda automaticamente o estado da meta.
+
+Esta etapa completa os modelos das dez tabelas de domínio, preparando os serviços
+de metas da Fase3. Autenticação e autorização HTTP ainda faltam na Fase1. CRUD,
+progresso, saldo livre e operações de reserva/retirada não estão disponíveis.
+As constraints por linha não garantem soma reservada não negativa ou dentro do
+saldo disponível: essas regras exigirão serviço transacional e testes de
+concorrência. Bloquear/alertar gastos do dinheiro reservado, progresso acima de
+100% e políticas de correção/exclusão dependem de decisões posteriores. Nenhum
+bloqueio de despesa ou trigger de total foi implementado. A tabela de movimentos
+também não representa auditoria ou imutabilidade prontas.
+
+Após aplicar a migration em ambiente autorizado, consulte apenas a estrutura no DBeaver:
+
+```sql
+SELECT table_name, column_name, data_type, numeric_precision, numeric_scale, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name IN ('financial_goals', 'goal_allocations')
+ORDER BY table_name, ordinal_position;
+
+SELECT table_name, constraint_name, constraint_type
+FROM information_schema.table_constraints
+WHERE table_schema = 'public' AND table_name IN ('financial_goals', 'goal_allocations')
+ORDER BY table_name, constraint_name;
+
+SELECT tablename, indexname, indexdef
+FROM pg_indexes
+WHERE schemaname = 'public' AND tablename IN ('financial_goals', 'goal_allocations')
 ORDER BY tablename, indexname;
 ```
