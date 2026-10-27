@@ -4,8 +4,8 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 
 ## Desenvolvimento
 
-A infraestrutura da Fase 0 está implementada. A primeira etapa da Fase 1 adiciona
-modelos e migração de usuários/sessões; cadastro e autenticação ainda serão implementados.
+A infraestrutura da Fase 0 está implementada. A Fase 1 adiciona modelos e migrações
+de usuários, sessões, contas e categorias; cadastro e autenticação ainda serão implementados.
 As funcionalidades financeiras descritas acima fazem parte do escopo planejado.
 
 A API inicial oferece `GET /health`. Execute na raiz do repositório:
@@ -307,11 +307,12 @@ backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini check
 ```
 
 `upgrade head` modifica o banco indicado pela configuração local. A revisão
-`0001_phase0` é uma base vazia; `0002_identity`, construída sobre ela, cria
-`users` e `user_sessions`, além do controle técnico `alembic_version`.
-Não há tabelas financeiras nesta etapa. Repetir o upgrade mantém a mesma revisão. A aplicação
+`0001_phase0` é uma base vazia; `0002_identity` cria `users` e `user_sessions`;
+`0003_accounts_categories` acrescenta `accounts` e `categories`, além do controle
+técnico `alembic_version`. Os demais modelos serão adicionados em unidades seguintes.
+Repetir o upgrade mantém a mesma revisão. A aplicação
 não executa migrações automaticamente ao iniciar. `check` compara o banco com
-`Base.metadata`, com usuários e sessões; tabelas criadas manualmente também podem ser
+`Base.metadata`, com usuários, sessões, contas e categorias; tabelas manuais também podem ser
 identificadas como divergências. Revise qualquer migração gerada antes de aplicá-la.
 
 Para visualizar o SQL sem abrir conexão ou ler credenciais:
@@ -331,12 +332,14 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0002_identity` e as tabelas `alembic_version`, `users` e `user_sessions`.
+`0003_accounts_categories` e as tabelas `alembic_version`, `users`, `user_sessions`,
+`accounts` e `categories`.
 Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
 são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
-O rollback de teste `downgrade 0001_phase0` remove as tabelas de identidade e
-seus registros. `downgrade base` também remove a linha de versão, mantendo a
+O rollback de teste `downgrade 0002_identity` remove contas/categorias, preservando
+usuários e sessões. `downgrade 0001_phase0` também remove identidade e seus registros.
+`downgrade base` remove ainda a linha de versão, mantendo a
 tabela técnica vazia. Não execute rollback em bancos com dados sem revisão e
 autorização específica; estes comandos são exercitados apenas no banco de teste.
 Os testes `--run-postgres` validam upgrade, downgrade e detecção de divergência
@@ -379,3 +382,55 @@ ORDER BY table_name, constraint_name;
 
 Espera-se ver as colunas de identidade/sessão, datas com fuso, chaves primárias,
 unicidade e a FK da sessão para o usuário. Nenhuma destas consultas modifica dados.
+
+### Persistência de contas e categorias
+
+`Account` armazena o proprietário, nome, tipo (`checking`, `savings`, `cash`,
+`investment`), moeda BRL, saldo/data de abertura e estado ativo. O saldo inicial
+aceita negativos e utiliza `NUMERIC(15,2)`/`Decimal`; não há coluna de saldo atual.
+O ORM exige `Decimal` finito, dentro do limite de 13 dígitos inteiros e dois
+decimais, rejeitando `float` e valores com frações menores que um centavo.
+Escritas SQL diretas obedecem à coerção/arredondamento nativos de `NUMERIC(15,2)`;
+as constraints também recusam valores não finitos. Veja os
+[tipos numéricos do PostgreSQL](https://www.postgresql.org/docs/18/datatype-numeric.html).
+
+`opening_date` persiste uma referência de data. O cálculo de saldo e a regra
+temporal de abertura/lançamentos serão definidos na etapa dos serviços financeiros.
+Esta entrega não resolve a pendência da especificação sobre início/fim do dia.
+
+`Category` tem proprietário, nome, tipo (`income`/`expense`), cor hexadecimal
+opcional no formato `#RRGGBB`, ícone opcional e estado ativo. O nome de exibição
+é preservado com remoção de espaços nas extremidades pelo ORM. A unicidade no
+banco usa `(user_id, type, lower(btrim(name)))`: ignora caixa/espaços externos na
+comparação, preserva acentos e inclui categorias arquivadas. Outro usuário ou
+outro tipo pode usar o mesmo nome. Não há categorias globais compartilhadas.
+
+Ambas usam UUIDv4, timestamps com fuso/UTC e FK para usuário com exclusão restrita.
+`UNIQUE(user_id, id)` prepara FKs compostas das próximas tabelas para impedir
+referências entre proprietários diferentes. Essas garantias não substituem a
+autorização HTTP que será implementada posteriormente. `is_active` permite
+arquivamento; nenhuma rota de CRUD é adicionada nesta unidade.
+
+Após aplicar a migração em ambiente autorizado, estas consultas DBeaver são
+somente de leitura e não selecionam valores financeiros ou hashes:
+
+```sql
+SELECT table_name, column_name, data_type, numeric_precision, numeric_scale, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name IN ('accounts', 'categories')
+ORDER BY table_name, ordinal_position;
+
+SELECT table_name, constraint_name, constraint_type
+FROM information_schema.table_constraints
+WHERE table_schema = 'public' AND table_name IN ('accounts', 'categories')
+ORDER BY table_name, constraint_name;
+
+SELECT tablename, indexname, indexdef
+FROM pg_indexes
+WHERE schemaname = 'public' AND tablename IN ('accounts', 'categories')
+ORDER BY tablename, indexname;
+```
+
+Espera-se `opening_balance` como numeric com precisão 15/escala 2, `opening_date`
+como date, chaves de proprietário, checks de tipos/moeda e índice único funcional
+das categorias. A aplicação não executa esta migração automaticamente.

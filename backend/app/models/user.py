@@ -19,6 +19,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from app.db.base import Base
 
 if TYPE_CHECKING:
+    from app.models.account import Account
+    from app.models.category import Category
     from app.models.user_session import UserSession
 
 
@@ -47,6 +49,10 @@ class User(Base):
     )
 
     sessions: Mapped[list["UserSession"]] = relationship(
+        back_populates="user", passive_deletes="all"
+    )
+    accounts: Mapped[list["Account"]] = relationship(back_populates="user", passive_deletes="all")
+    categories: Mapped[list["Category"]] = relationship(
         back_populates="user", passive_deletes="all"
     )
 
