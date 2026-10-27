@@ -5,7 +5,8 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 ## Desenvolvimento
 
 A infraestrutura da Fase 0 está implementada. A Fase 1 adiciona modelos e migrações
-de usuários, sessões, contas e categorias; cadastro e autenticação ainda serão implementados.
+de usuários, sessões, contas, categorias e prévias de importação;
+cadastro e autenticação ainda serão implementados.
 As funcionalidades financeiras descritas acima fazem parte do escopo planejado.
 
 A API inicial oferece `GET /health`. Execute na raiz do repositório:
@@ -308,11 +309,12 @@ backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini check
 
 `upgrade head` modifica o banco indicado pela configuração local. A revisão
 `0001_phase0` é uma base vazia; `0002_identity` cria `users` e `user_sessions`;
-`0003_accounts_categories` acrescenta `accounts` e `categories`, além do controle
-técnico `alembic_version`. Os demais modelos serão adicionados em unidades seguintes.
+`0003_accounts_categories` acrescenta `accounts` e `categories`;
+`0004_imports` cria `import_jobs` e `import_rows`, além do controle técnico
+`alembic_version`. Os demais modelos serão adicionados em unidades seguintes.
 Repetir o upgrade mantém a mesma revisão. A aplicação
 não executa migrações automaticamente ao iniciar. `check` compara o banco com
-`Base.metadata`, com usuários, sessões, contas e categorias; tabelas manuais também podem ser
+`Base.metadata`, com usuários, sessões, contas, categorias e importações; tabelas manuais podem ser
 identificadas como divergências. Revise qualquer migração gerada antes de aplicá-la.
 
 Para visualizar o SQL sem abrir conexão ou ler credenciais:
@@ -332,12 +334,13 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0003_accounts_categories` e as tabelas `alembic_version`, `users`, `user_sessions`,
-`accounts` e `categories`.
+`0004_imports` e as sete tabelas `alembic_version`, `users`, `user_sessions`,
+`accounts`, `categories`, `import_jobs` e `import_rows`.
 Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
 são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
-O rollback de teste `downgrade 0002_identity` remove contas/categorias, preservando
+O rollback de teste `downgrade 0003_accounts_categories` remove jobs/linhas,
+preservando identidade, contas e categorias. `downgrade 0002_identity` remove também contas/categorias, preservando
 usuários e sessões. `downgrade 0001_phase0` também remove identidade e seus registros.
 `downgrade base` remove ainda a linha de versão, mantendo a
 tabela técnica vazia. Não execute rollback em bancos com dados sem revisão e
@@ -434,3 +437,52 @@ ORDER BY tablename, indexname;
 Espera-se `opening_balance` como numeric com precisão 15/escala 2, `opening_date`
 como date, chaves de proprietário, checks de tipos/moeda e índice único funcional
 das categorias. A aplicação não executa esta migração automaticamente.
+
+### Persistência de prévias de importação
+
+`ImportJob` registra usuário, conta de destino, nome-base sanitizado, tipo CSV,
+checksum SHA-256, status, contadores e datas com fuso/UTC. A conta deve pertencer
+ao usuário. Os contadores exigem `0 <= imported_rows <= total_rows`; uma data de
+conclusão informada não pode anteceder a criação. Checksum não é único: arquivos
+repetidos exigirão revisão e regras de idempotência no serviço de importação.
+
+`ImportRow` guarda uma prévia com número de origem positivo e único por job.
+Data, descrição, valor, tipo e categoria são opcionais para representar linhas
+inválidas. O valor absoluto usa `NUMERIC(15,2)` e `Decimal` finito, não negativo,
+exato em centavos no ORM; zero pode existir na prévia. SQL direto segue o
+arredondamento nativo do PostgreSQL. Uma transação confirmada terá validações
+próprias, incluindo valor positivo. Fingerprints SHA-256 não são únicos.
+
+As chaves técnicas `user_id` e `account_id` da linha são derivadas do job.
+FKs compostas impedem misturar proprietário, conta e job, e exigem categoria
+sugerida do mesmo usuário. Uma chave única composta prepara o vínculo futuro
+com transações da mesma conta e proprietário. Os relacionamentos ORM escrevem
+somente as chaves pertinentes; atribuir uma categoria ou conta não troca o
+proprietário implicitamente. Veja a documentação do SQLAlchemy sobre
+[chaves estrangeiras sobrepostas](https://docs.sqlalchemy.org/en/21/orm/join_conditions.html#overlapping-foreign-keys).
+Exclusões de recursos referenciados são restritas, sem cascade destrutivo.
+
+Esta etapa fornece somente persistência. Upload, parser CSV, transições de status,
+sanitização de conteúdo/erros, revisão, confirmação e deduplicação serão serviços
+posteriores. As constraints não implementam autorização HTTP. Nenhum arquivo
+bancário é armazenado ou processado por esta entrega.
+
+Após aplicar a migration em ambiente autorizado, é possível inspecionar apenas
+a estrutura no DBeaver:
+
+```sql
+SELECT table_name, column_name, data_type, numeric_precision, numeric_scale, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name IN ('import_jobs', 'import_rows')
+ORDER BY table_name, ordinal_position;
+
+SELECT table_name, constraint_name, constraint_type
+FROM information_schema.table_constraints
+WHERE table_schema = 'public' AND table_name IN ('import_jobs', 'import_rows')
+ORDER BY table_name, constraint_name;
+
+SELECT tablename, indexname, indexdef
+FROM pg_indexes
+WHERE schemaname = 'public' AND tablename IN ('import_jobs', 'import_rows')
+ORDER BY tablename, indexname;
+```

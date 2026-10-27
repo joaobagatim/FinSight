@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from app.db.base import Base
 
 if TYPE_CHECKING:
+    from app.models.import_job import ImportJob
     from app.models.user import User
 
 
@@ -59,6 +60,14 @@ class Account(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="accounts")
+    import_jobs: Mapped[list["ImportJob"]] = relationship(
+        back_populates="account",
+        passive_deletes="all",
+        primaryjoin=(
+            "and_(Account.user_id == ImportJob.user_id, "
+            "Account.id == foreign(ImportJob.account_id))"
+        ),
+    )
 
     @validates("opening_balance")
     def validate_opening_balance(self, _key: str, value: Decimal) -> Decimal:
