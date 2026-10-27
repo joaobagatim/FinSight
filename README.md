@@ -5,7 +5,8 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 ## Desenvolvimento
 
 A infraestrutura da Fase 0 está implementada. A Fase 1 adiciona modelos e migrações
-de usuários, sessões, contas, categorias e prévias de importação;
+de usuários, sessões, contas, categorias, prévias de importação,
+transações e transferências;
 cadastro e autenticação ainda serão implementados.
 As funcionalidades financeiras descritas acima fazem parte do escopo planejado.
 
@@ -310,12 +311,15 @@ backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini check
 `upgrade head` modifica o banco indicado pela configuração local. A revisão
 `0001_phase0` é uma base vazia; `0002_identity` cria `users` e `user_sessions`;
 `0003_accounts_categories` acrescenta `accounts` e `categories`;
-`0004_imports` cria `import_jobs` e `import_rows`, além do controle técnico
+`0004_imports` cria `import_jobs` e `import_rows`;
+`0005_transactions_transfers` cria `transactions`/`transfers` e acrescenta
+a chave composta de proprietário/id/tipo em categorias, além do controle técnico
 `alembic_version`. Os demais modelos serão adicionados em unidades seguintes.
 Repetir o upgrade mantém a mesma revisão. A aplicação
 não executa migrações automaticamente ao iniciar. `check` compara o banco com
-`Base.metadata`, com usuários, sessões, contas, categorias e importações; tabelas manuais podem ser
-identificadas como divergências. Revise qualquer migração gerada antes de aplicá-la.
+`Base.metadata`, com identidade, contas, categorias, importações, transações e
+transferências; tabelas manuais podem ser identificadas como divergências.
+Revise qualquer migração gerada antes de aplicá-la.
 
 Para visualizar o SQL sem abrir conexão ou ler credenciais:
 
@@ -334,12 +338,15 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0004_imports` e as sete tabelas `alembic_version`, `users`, `user_sessions`,
-`accounts`, `categories`, `import_jobs` e `import_rows`.
+`0005_transactions_transfers` e as nove tabelas `alembic_version`, `users`,
+`user_sessions`, `accounts`, `categories`, `import_jobs`, `import_rows`,
+`transactions` e `transfers`.
 Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
 são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
-O rollback de teste `downgrade 0003_accounts_categories` remove jobs/linhas,
+O rollback de teste `downgrade 0004_imports` remove transações/transferências e a
+chave técnica de categoria/tipo acrescentada nesta revisão, preservando os dados
+das tabelas anteriores. `downgrade 0003_accounts_categories` remove também jobs/linhas,
 preservando identidade, contas e categorias. `downgrade 0002_identity` remove também contas/categorias, preservando
 usuários e sessões. `downgrade 0001_phase0` também remove identidade e seus registros.
 `downgrade base` remove ainda a linha de versão, mantendo a
@@ -484,5 +491,61 @@ ORDER BY table_name, constraint_name;
 SELECT tablename, indexname, indexdef
 FROM pg_indexes
 WHERE schemaname = 'public' AND tablename IN ('import_jobs', 'import_rows')
+ORDER BY tablename, indexname;
+```
+
+### Persistência de transações e transferências
+
+`Transaction` representa uma receita ou despesa com proprietário, conta, categoria,
+descrição obrigatória, valor, tipo `income`/`expense`, estado `planned`/`posted`,
+data econômica e observações opcionais. Tipo e estado devem ser informados
+explicitamente. `Transfer` representa um movimento entre duas contas próprias e
+diferentes, com valor, estado explícito, data e descrição opcional. Uma transferência
+persiste em uma única linha; não cria receitas/despesas automaticamente.
+
+Os valores usam `NUMERIC(15,2)`/`Decimal` finito, estritamente positivo e exato em
+centavos no ORM. Zero, negativos, `float`, valores fora da faixa e frações menores
+que um centavo são rejeitados. SQL direto segue coerção/arredondamento nativos do
+PostgreSQL. Ambas as entidades usam UUIDv4 e timestamps com fuso/UTC; `updated_at`
+é atualizado por operações SQLAlchemy, sem trigger de atualização para SQL manual.
+
+FKs compostas exigem contas e categorias do mesmo proprietário. A nova chave
+`UNIQUE(user_id, id, type)` em categorias permite exigir também que o tipo da
+categoria corresponda ao da transação. Uma categoria referenciada não pode ter
+seu tipo alterado de forma a invalidar transações existentes; o índice único de
+nomes normalizados permanece independente e inalterado.
+
+O vínculo opcional com uma linha importada exige mesmo usuário e conta. Um índice
+único parcial em `import_row_id` não nulo permite no máximo uma transação por
+linha; várias transações manuais podem manter esse campo nulo. Isso não confirma
+um job nem implementa idempotência completa ou validação do estado da prévia.
+Relacionamentos ORM escrevem apenas suas referências, preservando proprietário,
+tipo e conta explícitos ao atribuir categoria ou linha importada. Referências têm
+exclusão restrita, sem cascade destrutivo.
+
+Esta entrega prepara o schema da Fase1. Cálculos de saldo, CRUD, autenticação,
+autorização HTTP e fluxos de importação serão implementados nas etapas seguintes.
+`effective_date` é uma data obrigatória; a regra temporal em relação a
+`opening_date` será aplicada nos serviços após a definição da convenção de
+abertura. Atualmente o schema não compara essas datas. Os estados persistidos
+não executam cálculos nem mutações de saldo.
+
+Depois de aplicar a migration em ambiente autorizado, estas consultas DBeaver
+inspecionam somente a estrutura:
+
+```sql
+SELECT table_name, column_name, data_type, numeric_precision, numeric_scale, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name IN ('transactions', 'transfers')
+ORDER BY table_name, ordinal_position;
+
+SELECT table_name, constraint_name, constraint_type
+FROM information_schema.table_constraints
+WHERE table_schema = 'public' AND table_name IN ('transactions', 'transfers', 'categories')
+ORDER BY table_name, constraint_name;
+
+SELECT tablename, indexname, indexdef
+FROM pg_indexes
+WHERE schemaname = 'public' AND tablename IN ('transactions', 'transfers')
 ORDER BY tablename, indexname;
 ```

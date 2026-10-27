@@ -27,6 +27,7 @@ from app.models.import_job import normalize_sha256
 
 if TYPE_CHECKING:
     from app.models.import_job import ImportJob
+    from app.models.transaction import Transaction
 
 
 class ImportRow(Base):
@@ -88,6 +89,16 @@ class ImportRow(Base):
             Category.user_id == ImportRow.user_id,
             Category.id == foreign(ImportRow.suggested_category_id),
         )
+    )
+
+    transaction: Mapped["Transaction | None"] = relationship(
+        back_populates="import_row",
+        passive_deletes="all",
+        primaryjoin=(
+            "and_(ImportRow.user_id == Transaction.user_id, "
+            "ImportRow.account_id == Transaction.account_id, "
+            "ImportRow.id == foreign(Transaction.import_row_id))"
+        ),
     )
 
     @validates("amount")

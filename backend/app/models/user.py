@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from app.models.account import Account
     from app.models.category import Category
     from app.models.import_job import ImportJob
+    from app.models.transaction import Transaction
+    from app.models.transfer import Transfer
     from app.models.user_session import UserSession
 
 
@@ -59,6 +61,13 @@ class User(Base):
 
     import_jobs: Mapped[list["ImportJob"]] = relationship(
         back_populates="user", passive_deletes="all", foreign_keys="ImportJob.user_id"
+    )
+
+    transactions: Mapped[list["Transaction"]] = relationship(
+        back_populates="user", passive_deletes="all", foreign_keys="Transaction.user_id"
+    )
+    transfers: Mapped[list["Transfer"]] = relationship(
+        back_populates="user", passive_deletes="all", foreign_keys="Transfer.user_id"
     )
 
     @validates("email")
