@@ -25,6 +25,8 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.import_job import ImportJob
+    from app.models.transaction import Transaction
+    from app.models.transfer import Transfer
     from app.models.user import User
 
 
@@ -66,6 +68,31 @@ class Account(Base):
         primaryjoin=(
             "and_(Account.user_id == ImportJob.user_id, "
             "Account.id == foreign(ImportJob.account_id))"
+        ),
+    )
+
+    transactions: Mapped[list["Transaction"]] = relationship(
+        back_populates="account",
+        passive_deletes="all",
+        primaryjoin=(
+            "and_(Account.user_id == Transaction.user_id, "
+            "Account.id == foreign(Transaction.account_id))"
+        ),
+    )
+    outgoing_transfers: Mapped[list["Transfer"]] = relationship(
+        back_populates="from_account",
+        passive_deletes="all",
+        primaryjoin=(
+            "and_(Account.user_id == Transfer.user_id, "
+            "Account.id == foreign(Transfer.from_account_id))"
+        ),
+    )
+    incoming_transfers: Mapped[list["Transfer"]] = relationship(
+        back_populates="to_account",
+        passive_deletes="all",
+        primaryjoin=(
+            "and_(Account.user_id == Transfer.user_id, "
+            "Account.id == foreign(Transfer.to_account_id))"
         ),
     )
 

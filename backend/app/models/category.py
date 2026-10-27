@@ -21,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from app.db.base import Base
 
 if TYPE_CHECKING:
+    from app.models.transaction import Transaction
     from app.models.user import User
 
 
@@ -28,6 +29,7 @@ class Category(Base):
     __tablename__ = "categories"
     __table_args__ = (
         UniqueConstraint("user_id", "id", name="uq_categories_user_id_id"),
+        UniqueConstraint("user_id", "id", "type", name="uq_categories_user_id_id_type"),
         CheckConstraint("char_length(btrim(name)) > 0", name="ck_categories_name_not_blank"),
         CheckConstraint("type IN ('income', 'expense')", name="ck_categories_type"),
         CheckConstraint("color IS NULL OR color ~ '^#[0-9A-Fa-f]{6}$'", name="ck_categories_color"),
@@ -51,6 +53,15 @@ class Category(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="categories")
+
+    transactions: Mapped[list["Transaction"]] = relationship(
+        back_populates="category",
+        passive_deletes="all",
+        primaryjoin=(
+            "and_(Category.user_id == Transaction.user_id, "
+            "Category.id == foreign(Transaction.category_id), Category.type == Transaction.type)"
+        ),
+    )
 
     @validates("name")
     def trim_display_name(self, _key: str, value: str) -> str:
