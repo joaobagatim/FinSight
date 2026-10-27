@@ -21,6 +21,8 @@ from app.db.base import Base
 if TYPE_CHECKING:
     from app.models.account import Account
     from app.models.category import Category
+    from app.models.financial_goal import FinancialGoal
+    from app.models.goal_allocation import GoalAllocation
     from app.models.import_job import ImportJob
     from app.models.transaction import Transaction
     from app.models.transfer import Transfer
@@ -68,6 +70,13 @@ class User(Base):
     )
     transfers: Mapped[list["Transfer"]] = relationship(
         back_populates="user", passive_deletes="all", foreign_keys="Transfer.user_id"
+    )
+
+    financial_goals: Mapped[list["FinancialGoal"]] = relationship(
+        back_populates="user", passive_deletes="all"
+    )
+    goal_allocations: Mapped[list["GoalAllocation"]] = relationship(
+        back_populates="user", passive_deletes="all", foreign_keys="GoalAllocation.user_id"
     )
 
     @validates("email")

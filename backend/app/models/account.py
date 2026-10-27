@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from app.db.base import Base
 
 if TYPE_CHECKING:
+    from app.models.goal_allocation import GoalAllocation
     from app.models.import_job import ImportJob
     from app.models.transaction import Transaction
     from app.models.transfer import Transfer
@@ -93,6 +94,15 @@ class Account(Base):
         primaryjoin=(
             "and_(Account.user_id == Transfer.user_id, "
             "Account.id == foreign(Transfer.to_account_id))"
+        ),
+    )
+
+    goal_allocations: Mapped[list["GoalAllocation"]] = relationship(
+        back_populates="account",
+        passive_deletes="all",
+        primaryjoin=(
+            "and_(Account.user_id == GoalAllocation.user_id, "
+            "Account.id == foreign(GoalAllocation.account_id))"
         ),
     )
 
