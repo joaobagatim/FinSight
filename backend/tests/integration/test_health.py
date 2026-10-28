@@ -76,7 +76,7 @@ def test_unconfigured_cross_origin_method_is_rejected(client):
         "/health",
         headers={
             "Origin": "http://localhost:5173",
-            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Method": "DELETE",
         },
     )
 
