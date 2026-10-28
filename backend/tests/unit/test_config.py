@@ -11,6 +11,10 @@ def test_defaults_deny_cross_origin_requests():
 
     assert settings.environment == "development"
     assert settings.cors_origins == []
+    assert settings.registration_body_bytes == 16384
+    assert settings.registration_requests_per_minute == 5
+    assert settings.registration_client_capacity == 4096
+    assert settings.registration_concurrent_hashes == 2
 
 
 def test_environment_overrides_dotenv(tmp_path, monkeypatch):
@@ -87,6 +91,14 @@ def test_empty_or_example_database_password_is_rejected(password):
         {"db_host": ""},
         {"db_name": ""},
         {"db_user": ""},
+        {"registration_body_bytes": 1023},
+        {"registration_body_bytes": 65537},
+        {"registration_requests_per_minute": 0},
+        {"registration_requests_per_minute": 101},
+        {"registration_client_capacity": 0},
+        {"registration_client_capacity": 65537},
+        {"registration_concurrent_hashes": 0},
+        {"registration_concurrent_hashes": 9},
     ],
 )
 def test_invalid_database_settings_are_rejected(values):

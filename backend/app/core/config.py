@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     db_connect_timeout: int = Field(default=3, ge=1, le=30)
     db_pool_timeout: int = Field(default=3, ge=1, le=30)
     db_statement_timeout_ms: int = Field(default=3000, ge=100, le=30000)
+    registration_body_bytes: int = Field(default=16384, ge=1024, le=65536)
+    registration_requests_per_minute: int = Field(default=5, ge=1, le=100)
+    registration_client_capacity: int = Field(default=4096, ge=1, le=65536)
+    registration_concurrent_hashes: int = Field(default=2, ge=1, le=8)
 
     @field_validator("db_password")
     @classmethod

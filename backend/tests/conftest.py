@@ -69,6 +69,9 @@ def postgres_settings(request):
                 with admin.engine.connect().execution_options(
                     isolation_level="AUTOCOMMIT"
                 ) as connection:
+                    # DROP DATABASE can wait for a checkpoint on slower Docker hosts.
+                    # Keep a finite test-only DDL timeout; never terminate other clients.
+                    connection.exec_driver_sql("SET statement_timeout = '30s'")
                     connection.exec_driver_sql(f'DROP DATABASE "{name}"')
         finally:
             admin.dispose()

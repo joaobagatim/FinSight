@@ -6,8 +6,8 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 
 A infraestrutura da Fase 0 está implementada. A Fase 1 adiciona modelos e migrações
 de usuários, sessões, contas, categorias, prévias de importação,
-transações, transferências, metas e alocações;
-cadastro e autenticação ainda serão implementados.
+transações, transferências, metas e alocações, além do cadastro de usuários.
+Login e controle de sessões ainda serão implementados.
 As funcionalidades financeiras descritas acima fazem parte do escopo planejado.
 
 A API inicial oferece `GET /health`. Execute na raiz do repositório:
@@ -371,7 +371,7 @@ e timestamps PostgreSQL com fuso. A sessão do banco usa UTC. `updated_at` é
 atualizado pelas operações SQLAlchemy; não há trigger para atualizações SQL manuais.
 O ORM normaliza e-mail com remoção de espaços nas extremidades e minúsculas;
 o banco exige essa forma normalizada e unicidade, inclusive em escritas diretas.
-Validação completa de e-mail e hashing Argon2id serão responsabilidades do cadastro.
+Validação completa de e-mail e hashing Argon2id são realizados pelo cadastro abaixo.
 
 As sessões referenciam um usuário, exigem hash de refresh único e expiração
 posterior à criação. Revogação e último uso são opcionais e não podem anteceder
@@ -602,3 +602,59 @@ FROM pg_indexes
 WHERE schemaname = 'public' AND tablename IN ('financial_goals', 'goal_allocations')
 ORDER BY tablename, indexname;
 ```
+
+## Cadastro de usuários
+
+`POST /api/v1/auth/register` recebe somente JSON com `name`, `email` e `password`.
+Nome: string de 1 a 120 caracteres após remover espaços externos. E-mail: endereço
+válido, normalizado em minúsculas, até 255 caracteres; não há verificação por e-mail
+ou consulta DNS. Senha: 15 a 128 caracteres Unicode válidos, incluindo espaços,
+sem truncamento, normalização ou exigência de classes de caracteres; apenas
+espaços não são aceitos. Campos extras e tipos incompatíveis são rejeitados.
+
+A senha é armazenada como Argon2id com salt aleatório por hash e parâmetros
+`m=19456 KiB, t=2, p=1`. O endpoint usa uma sessão SQLAlchemy por requisição e
+`INSERT`/commit; a constraint única de e-mail resolve duplicatas e concorrência.
+O cadastro não cria categorias, contas, sessões ou tokens.
+
+Para criação válida e e-mail já cadastrado, a resposta é sempre **HTTP 200**:
+
+```json
+{"message":"Solicitação processada. Tente entrar com os dados informados."}
+```
+
+Uma duplicata não altera nome, senha ou estado do usuário existente. A resposta
+não permite distinguir essas situações por status ou corpo e não confirma que
+um login terá sucesso. Não há garantia de tempos de resposta idênticos.
+Login, refresh, cookies, CSRF de sessões e interface de cadastro são etapas futuras.
+
+| Status | Situação |
+| --- | --- |
+| 200 | Solicitação válida processada, inclusive e-mail existente |
+| 422 | Dados inválidos ou JSON malformado; erro sanitizado sem ecoar entradas |
+| 413 | Corpo acima do limite, inclusive em partes e sem Content-Length confiável |
+| 415 | Content-Type diferente de application/json |
+| 429 | Limite por cliente ou de hashes simultâneos; inclui Retry-After |
+| 503 | Banco não configurado/indisponível ou falha de persistência |
+
+As respostas POST do cadastro usam `Cache-Control: no-store`, sem `Set-Cookie`,
+tokens, UUID ou hash. Erros não retornam SQL, detalhes do driver, senhas ou campos
+extras fornecidos pelo cliente. CORS permite GET/POST apenas nas origens
+configuradas, sem credenciais; CORS não substitui autenticação/autorização.
+
+Os limites padrão, configuráveis no `.env.example`, são 16 KiB de corpo,
+cinco requisições por minuto/endereço de cliente, até 4096 clientes no registro
+temporário e dois hashes simultâneos. Não há fila de hashing: excesso recebe 429.
+O aplicativo usa o endereço recebido do servidor ASGI e não interpreta
+`X-Forwarded-For` diretamente. Proxies confiáveis devem ser configurados no servidor.
+
+Esses limites estão na memória de **cada processo**. Antes de produção com
+múltiplos workers/instâncias, configurar limite compartilhado ou na borda,
+HTTPS e proxies confiáveis. Não há limitador distribuído nesta entrega.
+
+Para testar uma criação, configure o banco e aplique as migrações em um ambiente
+autorizado conforme as instruções anteriores. Nunca envie senhas reais como
+exemplos ou as registre no terminal/log. Os testes automatizados usam somente
+identidades fictícias e PostgreSQL descartável; não consultam o banco pessoal.
+Pytest cobre criação, duplicatas e concorrência com PostgreSQL; Playwright
+valida contrato/privacidade/OpenAPI e 503 em servidor isolado sem banco.

@@ -1,4 +1,4 @@
-"""User identity; password hashing belongs to the future authentication service."""
+"""User identity; password hashing is handled by the registration service."""
 
 import uuid
 from datetime import datetime
