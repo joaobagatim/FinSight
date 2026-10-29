@@ -9,7 +9,7 @@ de usuários, sessões, contas, categorias, prévias de importação,
 transações, transferências, metas e alocações, além do cadastro de usuários.
 Há também primitivas de access JWT, serviço interno de sessões com rotação e
 revogação por reutilização de refresh, além de helpers de cookies e CSRF.
-Endpoints de autenticação e sua integração HTTP serão implementados depois.
+O ciclo de autenticação HTTP usa cookies protegidos, CSRF e perfil próprio.
 As funcionalidades financeiras descritas acima fazem parte do escopo planejado.
 
 A API inicial oferece `GET /health`. Execute na raiz do repositório:
@@ -319,7 +319,8 @@ a chave composta de proprietário/id/tipo em categorias;
 `0006_goals_allocations` cria `financial_goals` e `goal_allocations`;
 `0007_refresh_token_history` acrescenta a tabela técnica `refresh_token_history`.
 O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
-domínio estão modeladas; autenticação e autorização HTTP ainda serão implementadas.
+domínio estão modeladas; autenticação HTTP está disponível, mas os recursos
+financeiros e sua autorização HTTP ainda serão implementados.
 Repetir o upgrade mantém a mesma revisão. A aplicação
 não executa migrações automaticamente ao iniciar. `check` compara o banco com
 `Base.metadata`, com identidade, contas, categorias, importações, transações,
@@ -584,7 +585,7 @@ destrutivo. Persistir alocação não cria receita/despesa/transferência, não 
 saldo de abertura e não muda automaticamente o estado da meta.
 
 Esta etapa completa os modelos das dez tabelas de domínio, preparando os serviços
-de metas da Fase3. Autenticação e autorização HTTP ainda faltam na Fase1. CRUD,
+de metas da Fase3. Autenticação HTTP está disponível; autorização financeira, CRUD,
 progresso, saldo livre e operações de reserva/retirada não estão disponíveis.
 As constraints por linha não garantem soma reservada não negativa ou dentro do
 saldo disponível: essas regras exigirão serviço transacional e testes de
@@ -635,8 +636,8 @@ Para criação válida e e-mail já cadastrado, a resposta é sempre **HTTP 200*
 Uma duplicata não altera nome, senha ou estado do usuário existente. A resposta
 não permite distinguir essas situações por status ou corpo e não confirma que
 um login terá sucesso. Não há garantia de tempos de resposta idênticos.
-Serviços/helpers internos de sessão estão descritos ao final; sua integração
-HTTP e a interface de cadastro permanecem para etapas futuras.
+Serviços e endpoints de sessão estão descritos ao final. A interface de cadastro
+e demais telas de autenticação permanecem para etapas futuras.
 
 | Status | Situação |
 | --- | --- |
@@ -673,7 +674,7 @@ valida contrato/privacidade/OpenAPI e 503 em servidor isolado sem banco.
 
 `AccessTokenService`, em `backend/app/core/tokens.py`, emite e verifica access
 tokens para uso do serviço interno de sessões. O módulo JWT não consulta o
-banco ou define cookies; endpoints ainda não expõem esses tokens. O cadastro
+banco ou define cookies; os endpoints entregam credenciais apenas em cookies. O cadastro
 mantém seu contrato.
 
 A assinatura usa PyJWT com **HS256 fixo** e chave de 32 bytes aleatórios. Configure
@@ -718,8 +719,8 @@ detalhes da biblioteca no erro. Não há tokens retornados pela API nesta etapa.
 
 Uma assinatura válida não comprova usuário ativo, sessão não revogada ou acesso
 a um recurso. O serviço interno descrito abaixo consulta usuário/sessão; a
-dependência HTTP `get_current_user` e autorização de cada recurso serão
-integradas depois. Cookies/CSRF e refresh possuem helpers próprios; a rotação
+dependência HTTP `get_current_user` utiliza essa verificação. A autorização de
+cada recurso financeiro ainda será integrada. Cookies/CSRF e refresh possuem helpers próprios; a rotação
 operacional de chaves ainda não foi implementada. Alterar a chave
 de assinatura invalida a verificação dos tokens emitidos com a chave anterior.
 
@@ -757,9 +758,8 @@ Tokens aleatórios têm alta entropia e usam digest para consulta; senhas humana
 continuam protegidas por Argon2id. Nenhum helper grava `.env`, cria sessão,
 emite cookie ou expõe token por endpoint nesta etapa.
 
-Essa estrutura sustenta o serviço interno de sessões descrito abaixo. Endpoints
-de login, renovação, logout e perfil próprio ainda não estão expostos. A ligação
-HTTP e seus limites serão implementados na próxima etapa da mesma branch.
+Essa estrutura sustenta o serviço de sessões e os endpoints de login,
+renovação, logout e perfil próprio descritos abaixo.
 
 Não há limpeza automática. O histórico deve permanecer disponível durante a
 validade da sessão; a política operacional de retenção/expurgo será definida
@@ -777,7 +777,7 @@ anteriores no upgrade/downgrade. Não executam migrations no banco pessoal.
 autenticação de access JWT com consulta ao banco e revogação por credencial.
 Cada operação possui sua própria sessão SQLAlchemy e transação. O cadastro,
 health, CORS e frontend continuam com seus contratos atuais; esses serviços e
-helpers ainda não estão conectados a endpoints de autenticação.
+helpers são utilizados pelos endpoints descritos na próxima seção.
 
 O login normaliza o e-mail, preserva a senha e verifica Argon2id. Usuários
 desconhecidos passam por verificação com hash dummy em memória; isso reduz
@@ -837,7 +837,94 @@ são `finsight_access`, `finsight_refresh`, `finsight_preauth`, `finsight_csrf`.
 Produção exige true/HTTPS e origens HTTPS. Proxies precisarão de configuração
 de confiança própria antes de produção.
 
-CSRF/cookies são helpers internos, sem proteção HTTP ativa nesta etapa. A etapa
-seguinte integrará bootstrap, login/refresh/logout/perfil, limites de recursos,
-CORS explícito com credenciais e testes HTTP/navegador com PostgreSQL isolado.
-Nenhuma tela financeira ou de autenticação foi acrescentada aqui.
+Os endpoints abaixo integram CSRF/cookies, limites de recursos e CORS explícito
+com credenciais. Nenhuma tela financeira ou de autenticação foi acrescentada.
+
+## Autenticação HTTP
+
+As rotas ficam sob `/api/v1/auth`. Todas as suas respostas usam `Cache-Control:
+no-store`, inclusive erros e preflight. Configure as duas chaves distintas de
+assinatura e as origens explícitas do `.env.example` antes de usar as mutações
+de sessão. Ausência de configuração retorna erro503 estático; health e cadastro
+continuam independentes. Nenhum helper gera chaves reais ou altera seu `.env`.
+
+| Método/rota | Entrada | Sucesso |
+| --- | --- | --- |
+| `POST /csrf` | JSON `{}`, `Origin` autorizado, `X-CSRF-Bootstrap: 1` | 200 com `csrf_token` e cookies do contexto |
+| `POST /login` | JSON `email`/`password`, `Origin`, `X-CSRF-Token` | 204 com cookies de autenticação e novo CSRF |
+| `POST /refresh` | JSON `{}`, `Origin`, `X-CSRF-Token` da sessão | 204 com access/refresh rotacionados |
+| `POST /logout` | JSON `{}`, `Origin`, `X-CSRF-Token` correspondente | 204 com revogação e exclusão dos cookies |
+| `GET /me` | Access no cookie, sessão/usuário válidos | 200 com `id`, `name`, `email` próprios |
+
+O navegador deve fazer bootstrap antes do login, copiando o `csrf_token` ao
+header dedicado. O bootstrap usa POST para exigir Origin também na mesma
+origem; ele não autentica nem modifica sessões do banco. Login bem-sucedido
+remove o contexto pré-login e cria CSRF vinculado à nova sessão. O cliente deve
+usar o cookie CSRF atual nas próximas mutações ou solicitar novo bootstrap.
+Access/refresh nunca aparecem no JSON, no localStorage ou na URL.
+
+Uma sessão conhecida exige logout antes de outro login (409). Refresh não aceita
+tokens ou identificadores no corpo. Reutilização de token consumido com CSRF
+válido persiste a revogação antes de401; a política estrita de concorrência
+continua valendo. Não reenviar automaticamente POST de refresh após falha.
+
+Para CSRF, uma credencial conhecida pode identificar uma sessão expirada ou
+revogada, permitindo logout idempotente e limpeza segura. Esse UUID interno
+é apenas vínculo de assinatura, não autorização. Credenciais reconhecidas de
+sessões diferentes são recusadas. Sem credencial conhecida, bootstrap autorizado
+prepara pré-login e limpa cookies locais; logout com esse contexto apenas apaga
+cookies, sem revogar qualquer sessão por UUID fornecido pelo cliente.
+
+`GET /me` deriva o proprietário de credenciais validadas no backend, mesmo que
+uma query forneça outro `user_id`. Não há edição de perfil, troca/recuperação de
+senha ou autorização de operações financeiras nesta entrega.
+
+| Erro | Significado |
+| --- | --- |
+| 401 | Credencial/sessão negada; login não distingue usuário inexistente/inativo/senha errada |
+| 403 | Origem, CSRF, cookie ambíguo ou política de transporte recusados |
+| 409 | Logout necessário antes de iniciar outra sessão |
+| 413/415/422 | Corpo excessivo/tipo não JSON/dados inválidos, sem ecoar entradas |
+| 429 | Limite atingido, com `Retry-After` |
+| 503 | Configuração ou persistência indisponível, sem detalhes internos |
+
+Falhas de origem/CSRF não revogam sessões nem apagam cookies.401 de refresh após
+CSRF válido limpa cookies locais;503/429 preservam credenciais para nova tentativa.
+Consulta de perfil negada não altera cookies. Cabeçalhos de segurança e cookies
+duplicados são recusados antes de decisões mutáveis.
+
+CORS com credenciais se aplica somente às cinco rotas novas e a
+`FINSIGHT_AUTH_ALLOWED_ORIGINS`. Cadastro/health mantêm CORS sem credenciais.
+O navegador usa `credentials: 'include'`; no desenvolvimento, use o mesmo host
+no frontend e API (ambos `localhost` ou ambos `127.0.0.1`). Misturar esses hosts
+é incompatível com a política SameSite. Em produção, priorize a mesma origem
+HTTPS. Não ampliar para origens arbitrárias ou SameSite=None sem revisar o desenho.
+
+Limites por processo/IP: login5/minuto, demais rotas60/minuto e registro de
+clientes limitado4096. Corpo real limitado16KiB no login e1KiB nos outros POST,
+inclusive em partes/sem Content-Length confiável. Os nomes das configurações
+estão no `.env.example`. Login/cadastro compartilham os dois slots de Argon2;
+excesso não entra em fila. Limites compartilhados/borda e proxies confiáveis
+continuam necessários antes de produção com múltiplas instâncias.
+
+### Testes de sessão com banco descartável
+
+`npm test` preserva os onze testes iniciais com API sem banco na porta8001.
+Execute depois `npm run test:auth` para os fluxos de sessão em API8002 e navegador,
+com dois usuários sintéticos. A configuração separada exige Docker Linux e cria
+seu próprio PostgreSQL18.6 fixado por digest, nome/DB UUID e porta dinâmica em
+loopback, sem acessar `.env` ou banco pessoal. Ambos usam o frontend4175 e devem
+rodar sequencialmente; portas ocupadas não são reutilizadas.
+
+O global setup aplica migrations apenas nesse contêiner, gera chaves efêmeras
+em memória e cria usuários pelo cadastro HTTP. Teardown encerra somente processo
+e contêiner próprios, também em falhas de preparação. Encerramento forçado da
+máquina pode impedir cleanup; inspecione o nome UUID específico em
+`.cache/session-http-validation/playwright-cleanup.json` e remova somente esse
+recurso depois de confirmar sua propriedade. Nunca execute limpeza global.
+
+Relatórios ficam em `test-results/` e `playwright-report/`, ignorados pelo Git.
+Os projetos de sessão desabilitam traces, screenshots, vídeo e persistência de
+storageState para não gravar cookies/tokens. Asserções exibem status e campos
+sintéticos seguros. O CI executa os dois conjuntos; seu resultado depende da
+publicação e aprovação do PR.

@@ -211,3 +211,10 @@ def test_naive_deadlines_fail_with_uniform_error():
         policy.set_grant(
             Response(), grant(now).model_copy(update={"access_expires_at": datetime(2026, 1, 1)})
         )
+
+
+def test_selective_clear_preserves_other_cookie_names():
+    policy = AuthCookies(Settings(_env_file=None), request())
+    response = Response()
+    policy.clear(response, kinds=("preauth",))
+    assert set(cookies(response)) == {"__Host-finsight-preauth"}

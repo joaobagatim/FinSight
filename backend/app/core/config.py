@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     auth_csrf_signing_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
     auth_cookie_secure: bool = True
     auth_allowed_origins: list[AnyHttpUrl] = []
+    auth_login_requests_per_minute: int = Field(default=5, ge=1, le=100)
+    auth_requests_per_minute: int = Field(default=60, ge=1, le=1000)
+    auth_client_capacity: int = Field(default=4096, ge=1, le=65536)
+    auth_login_body_bytes: int = Field(default=16384, ge=1024, le=65536)
+    auth_body_bytes: int = Field(default=1024, ge=2, le=4096)
 
     @field_validator("jwt_signing_key", "auth_csrf_signing_key")
     @classmethod

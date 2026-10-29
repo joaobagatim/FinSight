@@ -37,6 +37,10 @@ class SessionUnavailable(Exception):
         super().__init__("Session service unavailable")
 
 
+class SessionBindingMismatch(AuthenticationDenied):
+    """Recognized conflicting credentials must never select a different context."""
+
+
 @lru_cache(maxsize=1)
 def _dummy_hash() -> str:
     return hash_password(secrets.token_urlsafe(32))
@@ -132,7 +136,9 @@ class SessionService:
                 .where(RefreshTokenHistory.token_hash == digest),
             )
         ).all()
-        if len(candidates) != 1:
+        if len(candidates) > 1:
+            raise SessionBindingMismatch()
+        if not candidates:
             raise AuthenticationDenied()
         return candidates[0][0], candidates[0][1]
 
@@ -243,6 +249,39 @@ class SessionService:
             return self._tokens.verify(token)
         except InvalidAccessToken:
             raise AuthenticationDenied() from None
+
+    def csrf_binding(
+        self, *, refresh: SecretStr | None = None, access: SecretStr | None = None
+    ) -> UUID:
+        """Resolve a MAC binding, NOT authorization; revoked/expired rows are allowed.
+
+        A known consumed refresh must reach replay handling after CSRF verification.
+        An expired/invalid access never supplies identity when a known refresh exists.
+        """
+        claims = None
+        if access is not None:
+            try:
+                claims = self._claims(access)
+            except AuthenticationDenied:
+                pass
+        with self._transaction() as session:
+            if refresh is not None:
+                user_id, session_id = self._resolve(session, self._digest(refresh))
+                if claims is not None and (
+                    claims.user_id != user_id or claims.session_id != session_id
+                ):
+                    raise SessionBindingMismatch()
+                return session_id
+            if claims is not None:
+                session_id = session.scalar(
+                    select(UserSession.id).where(
+                        UserSession.id == claims.session_id,
+                        UserSession.user_id == claims.user_id,
+                    )
+                )
+                if session_id is not None:
+                    return session_id
+        raise AuthenticationDenied()
 
     def revoke_by_refresh(self, token: str | SecretStr) -> None:
         digest = self._digest(token)

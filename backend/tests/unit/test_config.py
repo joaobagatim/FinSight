@@ -37,6 +37,22 @@ def test_invalid_session_security_configuration(kwargs):
         Settings(_env_file=None, **kwargs)
 
 
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("auth_login_requests_per_minute", 0),
+        ("auth_login_requests_per_minute", 101),
+        ("auth_requests_per_minute", 1001),
+        ("auth_client_capacity", 0),
+        ("auth_login_body_bytes", 65537),
+        ("auth_body_bytes", 1),
+    ],
+)
+def test_invalid_http_limits(name, value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{name: value})
+
+
 def test_defaults_deny_cross_origin_requests():
     settings = Settings(_env_file=None)
 

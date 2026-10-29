@@ -361,3 +361,30 @@ def test_missing_database_or_signing_key_fails_closed(settings):
         service.login(EMAIL, PASSWORD)
     with pytest.raises(TokenConfigurationError):
         SessionService(database, Settings(_env_file=None))
+
+
+def test_csrf_binding_is_not_authorization_and_accepts_consumed_digest(database, service, owner):
+    grant = service.login(EMAIL, PASSWORD)
+    second = service.refresh(grant.refresh_token)
+    assert (
+        service.csrf_binding(refresh=grant.refresh_token, access=second.access_token)
+        == grant.context.session_id
+    )
+    service.revoke_by_refresh(second.refresh_token)
+    assert service.csrf_binding(refresh=second.refresh_token) == grant.context.session_id
+    with pytest.raises(AuthenticationDenied):
+        service.authenticate(second.access_token)
+
+
+def test_csrf_binding_rejects_conflicting_signed_credentials(database, service, owner):
+    first = service.login(EMAIL, PASSWORD)
+    second = service.login(EMAIL, PASSWORD)
+    with pytest.raises(module.SessionBindingMismatch):
+        service.csrf_binding(refresh=first.refresh_token, access=second.access_token)
+
+
+def test_access_only_binding_requires_existing_owned_session(database, service, owner):
+    grant = service.login(EMAIL, PASSWORD)
+    assert service.csrf_binding(access=grant.access_token) == grant.context.session_id
+    with pytest.raises(AuthenticationDenied):
+        service.csrf_binding(access=service._tokens.issue(owner, uuid4()))

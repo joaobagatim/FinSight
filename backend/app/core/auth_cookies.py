@@ -125,8 +125,8 @@ class AuthCookies:
         ):
             raise CookiePolicyRejected()
 
-    def clear(self, response: Response) -> None:
-        for kind in _KINDS:
+    def clear(self, response: Response, *, kinds: tuple[CookieKind, ...] = _KINDS) -> None:
+        for kind in kinds:
             response.delete_cookie(
                 self.name(kind),
                 path="/",
