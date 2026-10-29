@@ -10,14 +10,15 @@
   },
   "scripts": {
     "test": "playwright test",
+    "test:auth": "playwright test --config=playwright.auth.config.ts",
     "test:api": "playwright test --project=api",
     "test:e2e": "playwright test --project=chromium",
     "test:report": "playwright show-report",
     "test:serve:frontend": "npm --prefix frontend run build && npm --prefix frontend run preview -- --port 4175",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint playwright.config.ts tests eslint.config.js --max-warnings 0",
-    "format": "prettier --write playwright.config.ts tsconfig.json tests package.json eslint.config.js .prettierrc.json",
-    "format:check": "prettier --check playwright.config.ts tsconfig.json tests package.json eslint.config.js .prettierrc.json"
+    "lint": "eslint playwright.config.ts playwright.auth.config.ts tests eslint.config.js --max-warnings 0",
+    "format": "prettier --write playwright.config.ts playwright.auth.config.ts tsconfig.json tests package.json eslint.config.js .prettierrc.json",
+    "format:check": "prettier --check playwright.config.ts playwright.auth.config.ts tsconfig.json tests package.json eslint.config.js .prettierrc.json"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

@@ -6,6 +6,53 @@ from pydantic import ValidationError
 from app.core.config import Settings
 
 
+def test_session_security_defaults_and_secret_exclusion():
+    settings = Settings(_env_file=None, jwt_signing_key="ab" * 32, auth_csrf_signing_key="cd" * 32)
+    assert settings.auth_refresh_ttl_seconds == 604800
+    assert settings.auth_csrf_ttl_seconds == 900
+    assert settings.auth_cookie_secure is True
+    assert settings.auth_allowed_origins == []
+    for output in (repr(settings), str(settings.model_dump()), settings.model_dump_json()):
+        assert "ab" * 32 not in output
+        assert "cd" * 32 not in output
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"auth_csrf_signing_key": "bad-marker"},
+        {"jwt_signing_key": "ab" * 32, "auth_csrf_signing_key": "AB" * 32},
+        {"environment": "production", "auth_cookie_secure": False},
+        {"environment": "production", "auth_allowed_origins": ["http://app.example.test"]},
+        {"auth_allowed_origins": ["https://app.example.test/path"]},
+        {"auth_allowed_origins": ["https://*.example.test"]},
+        {"auth_refresh_ttl_seconds": 0},
+        {"auth_refresh_ttl_seconds": 604801},
+        {"auth_csrf_ttl_seconds": 59},
+        {"auth_csrf_ttl_seconds": 3601},
+    ],
+)
+def test_invalid_session_security_configuration(kwargs):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("auth_login_requests_per_minute", 0),
+        ("auth_login_requests_per_minute", 101),
+        ("auth_requests_per_minute", 1001),
+        ("auth_client_capacity", 0),
+        ("auth_login_body_bytes", 65537),
+        ("auth_body_bytes", 1),
+    ],
+)
+def test_invalid_http_limits(name, value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{name: value})
+
+
 def test_defaults_deny_cross_origin_requests():
     settings = Settings(_env_file=None)
 

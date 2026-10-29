@@ -7,8 +7,9 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 A infraestrutura da Fase 0 está implementada. A Fase 1 adiciona modelos e migrações
 de usuários, sessões, contas, categorias, prévias de importação,
 transações, transferências, metas e alocações, além do cadastro de usuários.
-Há também primitivas internas de access JWT. Login e controle de sessões ainda
-serão implementados.
+Há também primitivas de access JWT, serviço interno de sessões com rotação e
+revogação por reutilização de refresh, além de helpers de cookies e CSRF.
+O ciclo de autenticação HTTP usa cookies protegidos, CSRF e perfil próprio.
 As funcionalidades financeiras descritas acima fazem parte do escopo planejado.
 
 A API inicial oferece `GET /health`. Execute na raiz do repositório:
@@ -315,13 +316,16 @@ backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini check
 `0004_imports` cria `import_jobs` e `import_rows`;
 `0005_transactions_transfers` cria `transactions`/`transfers` e acrescenta
 a chave composta de proprietário/id/tipo em categorias;
-`0006_goals_allocations` cria `financial_goals` e `goal_allocations`.
+`0006_goals_allocations` cria `financial_goals` e `goal_allocations`;
+`0007_refresh_token_history` acrescenta a tabela técnica `refresh_token_history`.
 O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
-domínio estão modeladas; autenticação e autorização HTTP ainda serão implementadas.
+domínio estão modeladas; autenticação HTTP está disponível, mas os recursos
+financeiros e sua autorização HTTP ainda serão implementados.
 Repetir o upgrade mantém a mesma revisão. A aplicação
 não executa migrações automaticamente ao iniciar. `check` compara o banco com
 `Base.metadata`, com identidade, contas, categorias, importações, transações,
-transferências, metas e alocações; tabelas manuais podem ser identificadas como divergências.
+transferências, metas, alocações e histórico de refresh; tabelas manuais podem ser
+identificadas como divergências.
 Revise qualquer migração gerada antes de aplicá-la.
 
 Para visualizar o SQL sem abrir conexão ou ler credenciais:
@@ -341,13 +345,18 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0006_goals_allocations` e as onze tabelas `alembic_version`, `users`,
+`0007_refresh_token_history` e as doze tabelas `alembic_version`, `users`,
 `user_sessions`, `accounts`, `categories`, `import_jobs`, `import_rows`,
-`transactions`, `transfers`, `financial_goals` e `goal_allocations`.
+`transactions`, `transfers`, `financial_goals`, `goal_allocations` e
+`refresh_token_history`.
 Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
 são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
-O rollback de teste `downgrade 0005_transactions_transfers` remove metas/alocações,
+O rollback de teste `downgrade 0006_goals_allocations` remove somente o histórico
+de hashes consumidos. Isso elimina informação necessária à futura detecção de
+reutilização; em um ambiente com sessões reais, é necessário analisar e revogar
+sessões antes de remover esse histórico, com autorização específica.
+`downgrade 0005_transactions_transfers` remove também metas/alocações,
 preservando as tabelas anteriores. `downgrade 0004_imports` remove também transações/transferências e a
 chave técnica de categoria/tipo acrescentada nesta revisão, preservando os dados
 das tabelas anteriores. `downgrade 0003_accounts_categories` remove também jobs/linhas,
@@ -376,8 +385,8 @@ Validação completa de e-mail e hashing Argon2id são realizados pelo cadastro 
 
 As sessões referenciam um usuário, exigem hash de refresh único e expiração
 posterior à criação. Revogação e último uso são opcionais e não podem anteceder
-a criação. Os campos armazenam hashes; ainda não existe serviço que gere,
-valide ou renove tokens. O schema não verifica criptograficamente um hash.
+a criação. Os campos armazenam hashes; o serviço interno descrito ao final
+gera e renova tokens. O schema não verifica criptograficamente um hash.
 A exclusão de um usuário com sessões é recusada pelo banco, sem cascade automático.
 
 Para inspecionar a estrutura no DBeaver sem consultar hashes ou dados pessoais:
@@ -576,7 +585,7 @@ destrutivo. Persistir alocação não cria receita/despesa/transferência, não 
 saldo de abertura e não muda automaticamente o estado da meta.
 
 Esta etapa completa os modelos das dez tabelas de domínio, preparando os serviços
-de metas da Fase3. Autenticação e autorização HTTP ainda faltam na Fase1. CRUD,
+de metas da Fase3. Autenticação HTTP está disponível; autorização financeira, CRUD,
 progresso, saldo livre e operações de reserva/retirada não estão disponíveis.
 As constraints por linha não garantem soma reservada não negativa ou dentro do
 saldo disponível: essas regras exigirão serviço transacional e testes de
@@ -627,7 +636,8 @@ Para criação válida e e-mail já cadastrado, a resposta é sempre **HTTP 200*
 Uma duplicata não altera nome, senha ou estado do usuário existente. A resposta
 não permite distinguir essas situações por status ou corpo e não confirma que
 um login terá sucesso. Não há garantia de tempos de resposta idênticos.
-Login, refresh, cookies, CSRF de sessões e interface de cadastro são etapas futuras.
+Serviços e endpoints de sessão estão descritos ao final. A interface de cadastro
+e demais telas de autenticação permanecem para etapas futuras.
 
 | Status | Situação |
 | --- | --- |
@@ -663,8 +673,9 @@ valida contrato/privacidade/OpenAPI e 503 em servidor isolado sem banco.
 ## Primitivas internas de access JWT
 
 `AccessTokenService`, em `backend/app/core/tokens.py`, emite e verifica access
-tokens para uso dos futuros serviços de autenticação. Esta unidade não adiciona
-endpoint, cookie, login ou persistência de sessão. O cadastro mantém seu contrato.
+tokens para uso do serviço interno de sessões. O módulo JWT não consulta o
+banco ou define cookies; os endpoints entregam credenciais apenas em cookies. O cadastro
+mantém seu contrato.
 
 A assinatura usa PyJWT com **HS256 fixo** e chave de 32 bytes aleatórios. Configure
 `FINSIGHT_JWT_SIGNING_KEY` com a representação hexadecimal de 64 caracteres dessa
@@ -707,11 +718,213 @@ inválidos produzem `InvalidAccessToken` uniforme, sem retornar token, claims ou
 detalhes da biblioteca no erro. Não há tokens retornados pela API nesta etapa.
 
 Uma assinatura válida não comprova usuário ativo, sessão não revogada ou acesso
-a um recurso. Os futuros serviços de login e `get_current_user` deverão consultar
-usuário/sessão e autorizar o proprietário de cada recurso. Cookies, CSRF, refresh
-rotativo, logout e rotação de chaves terão implementação própria. Alterar a chave
+a um recurso. O serviço interno descrito abaixo consulta usuário/sessão; a
+dependência HTTP `get_current_user` utiliza essa verificação. A autorização de
+cada recurso financeiro ainda será integrada. Cookies/CSRF e refresh possuem helpers próprios; a rotação
+operacional de chaves ainda não foi implementada. Alterar a chave
 de assinatura invalida a verificação dos tokens emitidos com a chave anterior.
 
 Os testes usam chaves e identidades sintéticas, relógio controlado e assinaturas
 reais. Cobrem adulteração, algoritmos indevidos, claims ausentes/malformadas,
 expiração, configuração e privacidade, além das regressões existentes.
+
+## Histórico técnico de refresh tokens
+
+A revisão `0007_refresh_token_history` cria uma tabela vazia para guardar digests
+de refresh tokens consumidos. As dez tabelas de domínio e seus dados são
+preservados. A aplicação não executa migrações automaticamente.
+
+| Campo | Regra |
+| --- | --- |
+| `id` | UUIDv4 gerado pela aplicação |
+| `session_id` | FK obrigatória para `user_sessions.id`, com exclusão RESTRICT e índice |
+| `token_hash` | Digest SHA-256 em 64 caracteres hexadecimais minúsculos, obrigatório e único |
+| `used_at` | Timestamp com fuso, obrigatório, default do banco; conexões em UTC |
+
+O proprietário é derivado de `UserSession`, sem duplicar `user_id`. A tabela não
+armazena token bruto, access JWT, senha, IP ou user-agent. A relação ORM
+`UserSession.used_refresh_tokens` mantém a exclusão restrita mesmo quando a
+coleção está carregada. Isso não representa uma auditoria imutável.
+
+Em `backend/app/core/refresh_tokens.py`, `generate_refresh_token()` usa
+`secrets.token_urlsafe(32)` e retorna `SecretStr`: 32 bytes aleatórios (256 bits),
+em 43 caracteres base64url sem padding. `refresh_token_digest()` exige essa
+representação canônica antes de calcular SHA-256 do texto ASCII. Erros de formato
+são uniformes, sem ecoar a credencial; entradas excessivas são recusadas antes
+da decodificação e do hashing. O formato não comprova aleatoriedade: credenciais
+emitidas devem vir do gerador criptográfico, e não de exemplos ou fixtures.
+
+Tokens aleatórios têm alta entropia e usam digest para consulta; senhas humanas
+continuam protegidas por Argon2id. Nenhum helper grava `.env`, cria sessão,
+emite cookie ou expõe token por endpoint nesta etapa.
+
+Essa estrutura sustenta o serviço de sessões e os endpoints de login,
+renovação, logout e perfil próprio descritos abaixo.
+
+Não há limpeza automática. O histórico deve permanecer disponível durante a
+validade da sessão; a política operacional de retenção/expurgo será definida
+antes de produção. Remover a tabela perde digests consumidos. O downgrade para
+`0006_goals_allocations` preserva as dez tabelas anteriores, mas requer revisão
+de segurança e autorização própria em ambientes com sessões reais.
+
+Os testes usam dados sintéticos e PostgreSQL descartável para validar FK,
+unicidade, formato, UTC, restrição de exclusão e preservação dos registros
+anteriores no upgrade/downgrade. Não executam migrations no banco pessoal.
+
+## Ciclo interno de sessões e proteção de cookies
+
+`backend/app/services/sessions.py` fornece `SessionService`: login, refresh,
+autenticação de access JWT com consulta ao banco e revogação por credencial.
+Cada operação possui sua própria sessão SQLAlchemy e transação. O cadastro,
+health, CORS e frontend continuam com seus contratos atuais; esses serviços e
+helpers são utilizados pelos endpoints descritos na próxima seção.
+
+O login normaliza o e-mail, preserva a senha e verifica Argon2id. Usuários
+desconhecidos passam por verificação com hash dummy em memória; isso reduz
+diferenças de caminho sem garantir tempos iguais. Usuário inexistente/inativo
+ou senha errada recebem a mesma negação interna. Depois da verificação, o
+serviço bloqueia e relê usuário/hash para conferir mudanças concorrentes.
+
+Cada login cria uma sessão independente. Refresh usa token opaco aleatório,
+guardando somente digest. O prazo padrão é **sete dias absolutos**, configurável
+entre uma hora e sete dias por `FINSIGHT_AUTH_REFRESH_TTL_SECONDS`. Renovar não
+estende esse prazo. Access JWT mantém o prazo configurado, padrão15minutos; o
+acesso efetivo e o cookie também respeitam a expiração da sessão.
+
+Na renovação, o serviço bloqueia User antes de UserSession, relê os dados e
+atualiza o digest atual, o histórico consumido e last_used_at atomicamente.
+Credenciais só são entregues após o commit. Reutilizar um digest consumido
+conhecido revoga a sessão; a revogação é confirmada antes de retornar a negação.
+Token desconhecido ou UUID isolado não autoriza revogar uma sessão.
+
+A política de concorrência é estrita: dois refreshes com o mesmo token podem
+resultar em uma emissão inicial seguida de revogação da sessão. Isso também
+invalida a emissão inicial nas próximas verificações e pode exigir novo login
+após uma corrida legítima. O cliente futuro deverá serializar renovações. Não
+há janela de tolerância ou armazenamento de tokens brutos para reenvio.
+
+`authenticate()` valida assinatura/claims e consulta o vínculo usuário/sessão:
+sub/sid devem corresponder, o usuário deve estar ativo e a sessão deve estar
+criada, válida e não revogada. Logout interno exige refresh conhecido ou access
+JWT assinado com vínculo válido; é idempotente e não afeta outras sessões.
+Novas verificações são negadas após revogação; requisições em andamento não são
+canceladas. Resultados internos excluem credenciais de repr e serialização.
+
+`backend/app/core/csrf.py` implementa double-submit assinado HMAC-SHA256,
+vinculado a contexto aleatório de pré-login ou sessão verificada pelo servidor,
+com propósitos separados. Cookie/header devem coincidir, assinatura e prazo
+devem ser válidos. O token é limitado a 256 bytes e não é de uso único. Origens
+de mutações precisam constar em `FINSIGHT_AUTH_ALLOWED_ORIGINS`; ausência/null
+ou origem desconhecida é negada. SameSite e CORS não substituem CSRF.
+
+Configure `FINSIGHT_AUTH_CSRF_SIGNING_KEY` separadamente da chave JWT: 32 bytes
+aleatórios representados por 64 caracteres hexadecimais. As duas chaves não podem ser iguais. Não
+há geração automática, chave padrão ou gravação em `.env`. O exemplo comentado
+é inutilizável; nunca publique chaves reais. Prazo CSRF padrão de 900 segundos,
+configurável entre 60–3600 por `FINSIGHT_AUTH_CSRF_TTL_SECONDS`.
+
+`backend/app/core/auth_cookies.py` define cookies host-only, Path=/,
+SameSite=Lax. Em HTTPS seguro usa prefixo `__Host-finsight-` e Secure; access,
+refresh e pré-login são HttpOnly. Somente o cookie CSRF é legível pelo cliente
+para cópia ao header. Expiração é limitada pelos prazos correspondentes;
+exclusão repete os atributos. Cookies duplicados ou cabeçalhos acima de 16 KiB são
+recusados, e credenciais não ficam em JSON ou localStorage pelos helpers.
+
+`FINSIGHT_AUTH_COOKIE_SECURE` é true por padrão. O `.env.example` demonstra
+false explicitamente para HTTP de desenvolvimento/teste: exige hostname local
+e cliente ASGI em loopback, sem confiar em X-Forwarded-*. Nesse caso os nomes
+são `finsight_access`, `finsight_refresh`, `finsight_preauth`, `finsight_csrf`.
+Produção exige true/HTTPS e origens HTTPS. Proxies precisarão de configuração
+de confiança própria antes de produção.
+
+Os endpoints abaixo integram CSRF/cookies, limites de recursos e CORS explícito
+com credenciais. Nenhuma tela financeira ou de autenticação foi acrescentada.
+
+## Autenticação HTTP
+
+As rotas ficam sob `/api/v1/auth`. Todas as suas respostas usam `Cache-Control:
+no-store`, inclusive erros e preflight. Configure as duas chaves distintas de
+assinatura e as origens explícitas do `.env.example` antes de usar as mutações
+de sessão. Ausência de configuração retorna erro503 estático; health e cadastro
+continuam independentes. Nenhum helper gera chaves reais ou altera seu `.env`.
+
+| Método/rota | Entrada | Sucesso |
+| --- | --- | --- |
+| `POST /csrf` | JSON `{}`, `Origin` autorizado, `X-CSRF-Bootstrap: 1` | 200 com `csrf_token` e cookies do contexto |
+| `POST /login` | JSON `email`/`password`, `Origin`, `X-CSRF-Token` | 204 com cookies de autenticação e novo CSRF |
+| `POST /refresh` | JSON `{}`, `Origin`, `X-CSRF-Token` da sessão | 204 com access/refresh rotacionados |
+| `POST /logout` | JSON `{}`, `Origin`, `X-CSRF-Token` correspondente | 204 com revogação e exclusão dos cookies |
+| `GET /me` | Access no cookie, sessão/usuário válidos | 200 com `id`, `name`, `email` próprios |
+
+O navegador deve fazer bootstrap antes do login, copiando o `csrf_token` ao
+header dedicado. O bootstrap usa POST para exigir Origin também na mesma
+origem; ele não autentica nem modifica sessões do banco. Login bem-sucedido
+remove o contexto pré-login e cria CSRF vinculado à nova sessão. O cliente deve
+usar o cookie CSRF atual nas próximas mutações ou solicitar novo bootstrap.
+Access/refresh nunca aparecem no JSON, no localStorage ou na URL.
+
+Uma sessão conhecida exige logout antes de outro login (409). Refresh não aceita
+tokens ou identificadores no corpo. Reutilização de token consumido com CSRF
+válido persiste a revogação antes de401; a política estrita de concorrência
+continua valendo. Não reenviar automaticamente POST de refresh após falha.
+
+Para CSRF, uma credencial conhecida pode identificar uma sessão expirada ou
+revogada, permitindo logout idempotente e limpeza segura. Esse UUID interno
+é apenas vínculo de assinatura, não autorização. Credenciais reconhecidas de
+sessões diferentes são recusadas. Sem credencial conhecida, bootstrap autorizado
+prepara pré-login e limpa cookies locais; logout com esse contexto apenas apaga
+cookies, sem revogar qualquer sessão por UUID fornecido pelo cliente.
+
+`GET /me` deriva o proprietário de credenciais validadas no backend, mesmo que
+uma query forneça outro `user_id`. Não há edição de perfil, troca/recuperação de
+senha ou autorização de operações financeiras nesta entrega.
+
+| Erro | Significado |
+| --- | --- |
+| 401 | Credencial/sessão negada; login não distingue usuário inexistente/inativo/senha errada |
+| 403 | Origem, CSRF, cookie ambíguo ou política de transporte recusados |
+| 409 | Logout necessário antes de iniciar outra sessão |
+| 413/415/422 | Corpo excessivo/tipo não JSON/dados inválidos, sem ecoar entradas |
+| 429 | Limite atingido, com `Retry-After` |
+| 503 | Configuração ou persistência indisponível, sem detalhes internos |
+
+Falhas de origem/CSRF não revogam sessões nem apagam cookies.401 de refresh após
+CSRF válido limpa cookies locais;503/429 preservam credenciais para nova tentativa.
+Consulta de perfil negada não altera cookies. Cabeçalhos de segurança e cookies
+duplicados são recusados antes de decisões mutáveis.
+
+CORS com credenciais se aplica somente às cinco rotas novas e a
+`FINSIGHT_AUTH_ALLOWED_ORIGINS`. Cadastro/health mantêm CORS sem credenciais.
+O navegador usa `credentials: 'include'`; no desenvolvimento, use o mesmo host
+no frontend e API (ambos `localhost` ou ambos `127.0.0.1`). Misturar esses hosts
+é incompatível com a política SameSite. Em produção, priorize a mesma origem
+HTTPS. Não ampliar para origens arbitrárias ou SameSite=None sem revisar o desenho.
+
+Limites por processo/IP: login5/minuto, demais rotas60/minuto e registro de
+clientes limitado4096. Corpo real limitado16KiB no login e1KiB nos outros POST,
+inclusive em partes/sem Content-Length confiável. Os nomes das configurações
+estão no `.env.example`. Login/cadastro compartilham os dois slots de Argon2;
+excesso não entra em fila. Limites compartilhados/borda e proxies confiáveis
+continuam necessários antes de produção com múltiplas instâncias.
+
+### Testes de sessão com banco descartável
+
+`npm test` preserva os onze testes iniciais com API sem banco na porta8001.
+Execute depois `npm run test:auth` para os fluxos de sessão em API8002 e navegador,
+com dois usuários sintéticos. A configuração separada exige Docker Linux e cria
+seu próprio PostgreSQL18.6 fixado por digest, nome/DB UUID e porta dinâmica em
+loopback, sem acessar `.env` ou banco pessoal. Ambos usam o frontend4175 e devem
+rodar sequencialmente; portas ocupadas não são reutilizadas.
+
+O global setup aplica migrations apenas nesse contêiner, gera chaves efêmeras
+em memória e cria usuários pelo cadastro HTTP. Teardown encerra somente processo
+e contêiner próprios, também em falhas de preparação. Encerramento forçado da
+máquina pode impedir cleanup; inspecione o nome UUID específico em
+`.cache/session-http-validation/playwright-cleanup.json` e remova somente esse
+recurso depois de confirmar sua propriedade. Nunca execute limpeza global.
+
+Relatórios ficam em `test-results/` e `playwright-report/`, ignorados pelo Git.
+Os projetos de sessão desabilitam traces, screenshots, vídeo e persistência de
+storageState para não gravar cookies/tokens. Asserções exibem status e campos
+sintéticos seguros. O CI executa os dois conjuntos; seu resultado depende da
+publicação e aprovação do PR.

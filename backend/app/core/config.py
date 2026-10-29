@@ -37,12 +37,22 @@ class Settings(BaseSettings):
     jwt_issuer: str = Field(default="finsight-api", min_length=1, max_length=120)
     jwt_audience: str = Field(default="finsight-web", min_length=1, max_length=120)
     jwt_access_ttl_seconds: int = Field(default=900, ge=60, le=900)
+    auth_refresh_ttl_seconds: int = Field(default=604800, ge=3600, le=604800)
+    auth_csrf_ttl_seconds: int = Field(default=900, ge=60, le=3600)
+    auth_csrf_signing_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
+    auth_cookie_secure: bool = True
+    auth_allowed_origins: list[AnyHttpUrl] = []
+    auth_login_requests_per_minute: int = Field(default=5, ge=1, le=100)
+    auth_requests_per_minute: int = Field(default=60, ge=1, le=1000)
+    auth_client_capacity: int = Field(default=4096, ge=1, le=65536)
+    auth_login_body_bytes: int = Field(default=16384, ge=1024, le=65536)
+    auth_body_bytes: int = Field(default=1024, ge=2, le=4096)
 
-    @field_validator("jwt_signing_key")
+    @field_validator("jwt_signing_key", "auth_csrf_signing_key")
     @classmethod
     def validate_jwt_signing_key(cls, key: SecretStr | None) -> SecretStr | None:
         if key is not None and re.fullmatch(r"[0-9a-fA-F]{64}", key.get_secret_value()) is None:
-            raise ValueError("JWT signing key must contain exactly 64 hexadecimal characters")
+            raise ValueError("Signing keys must contain exactly 64 hexadecimal characters")
         return key
 
     @field_validator("jwt_issuer", "jwt_audience", mode="before")
@@ -71,7 +81,7 @@ class Settings(BaseSettings):
             )
         return password
 
-    @field_validator("cors_origins")
+    @field_validator("cors_origins", "auth_allowed_origins")
     @classmethod
     def validate_origins(cls, origins: list[AnyHttpUrl]) -> list[AnyHttpUrl]:
         for origin in origins:
@@ -89,7 +99,16 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_production_origins(self) -> "Settings":
         if self.environment == "production" and any(
-            origin.scheme != "https" for origin in self.cors_origins
+            origin.scheme != "https" for origin in [*self.cors_origins, *self.auth_allowed_origins]
         ):
             raise ValueError("Production CORS origins must use HTTPS")
+        if self.environment == "production" and not self.auth_cookie_secure:
+            raise ValueError("Production authentication cookies must be secure")
+        if (
+            self.jwt_signing_key is not None
+            and self.auth_csrf_signing_key is not None
+            and bytes.fromhex(self.jwt_signing_key.get_secret_value())
+            == bytes.fromhex(self.auth_csrf_signing_key.get_secret_value())
+        ):
+            raise ValueError("Authentication signing keys must be distinct")
         return self

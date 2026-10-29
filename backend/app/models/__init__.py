@@ -6,6 +6,7 @@ from app.models.financial_goal import FinancialGoal
 from app.models.goal_allocation import GoalAllocation
 from app.models.import_job import ImportJob
 from app.models.import_row import ImportRow
+from app.models.refresh_token_history import RefreshTokenHistory
 from app.models.transaction import Transaction
 from app.models.transfer import Transfer
 from app.models.user import User
@@ -18,6 +19,7 @@ __all__ = [
     "GoalAllocation",
     "ImportJob",
     "ImportRow",
+    "RefreshTokenHistory",
     "Transaction",
     "Transfer",
     "User",
