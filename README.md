@@ -7,7 +7,8 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 A infraestrutura da Fase 0 está implementada. A Fase 1 adiciona modelos e migrações
 de usuários, sessões, contas, categorias, prévias de importação,
 transações, transferências, metas e alocações, além do cadastro de usuários.
-Login e controle de sessões ainda serão implementados.
+Há também primitivas internas de access JWT. Login e controle de sessões ainda
+serão implementados.
 As funcionalidades financeiras descritas acima fazem parte do escopo planejado.
 
 A API inicial oferece `GET /health`. Execute na raiz do repositório:
@@ -658,3 +659,59 @@ exemplos ou as registre no terminal/log. Os testes automatizados usam somente
 identidades fictícias e PostgreSQL descartável; não consultam o banco pessoal.
 Pytest cobre criação, duplicatas e concorrência com PostgreSQL; Playwright
 valida contrato/privacidade/OpenAPI e 503 em servidor isolado sem banco.
+
+## Primitivas internas de access JWT
+
+`AccessTokenService`, em `backend/app/core/tokens.py`, emite e verifica access
+tokens para uso dos futuros serviços de autenticação. Esta unidade não adiciona
+endpoint, cookie, login ou persistência de sessão. O cadastro mantém seu contrato.
+
+A assinatura usa PyJWT com **HS256 fixo** e chave de 32 bytes aleatórios. Configure
+`FINSIGHT_JWT_SIGNING_KEY` com a representação hexadecimal de 64 caracteres dessa
+chave, mantendo o valor somente na configuração privada. O `.env.example` contém
+uma instrução comentada e um placeholder não utilizável. O formato validado não
+comprova aleatoriedade: a chave deve ser gerada por um gerador criptográfico.
+Nenhuma chave padrão é utilizada ou gerada automaticamente pela aplicação.
+
+Sem chave configurada, a API, health e cadastro continuam disponíveis;
+instanciar o serviço JWT gera `TokenConfigurationError` com mensagem estática.
+Uma chave explicitamente inválida impede carregar Settings, sem ecoar seu valor
+no diagnóstico textual. A chave é `SecretStr`, excluída de repr e exportações de
+Settings. Nunca registrar configuração sensível ou serializar erros de validação
+com seus dados de entrada. Nenhuma chave real precisa ser criada para os testes.
+
+| Variável | Padrão e validação |
+| --- | --- |
+| `FINSIGHT_JWT_SIGNING_KEY` | Ausente; quando definida, exatamente 64 caracteres hexadecimais |
+| `FINSIGHT_JWT_ISSUER` | `finsight-api`, string não vazia até 120 caracteres após trim |
+| `FINSIGHT_JWT_AUDIENCE` | `finsight-web`, string não vazia até 120 caracteres após trim |
+| `FINSIGHT_JWT_ACCESS_TTL_SECONDS` | 900 segundos; intervalo permitido de 60 a 900 |
+
+`issue(user_id, session_id)` aceita objetos UUIDv4 internos e retorna `SecretStr`.
+O token contém somente `sub`, `sid`, `iss`, `aud`, `iat`, `nbf`, `exp`, `jti` e
+`token_use=access`, com `typ=finsight-access+jwt`. O `jti` é um novo UUIDv4 a cada
+emissão. Não há nome, e-mail, senha, hash ou dados financeiros no payload.
+JWT é assinado e legível; não fornece criptografia do conteúdo.
+O JSON usa UTF-8 para manter identificadores Unicode válidos, inclusive no limite
+de tamanho configurado, dentro do limite de bytes aceito pelo verificador.
+
+`verify(token)` aceita até 4096 bytes ASCII, fixa o algoritmo permitido e confere
+assinatura, issuer, audience única, cabeçalho, propósito, campos obrigatórios e
+tipos. UUIDs devem ser v4 em formato canônico; datas são inteiros em UTC, sem
+aceitar strings/booleanos como timestamps. Exige `nbf=iat`, duração positiva dentro
+do TTL, emissão já válida e expiração futura, sem tolerância adicional de relógio.
+Cabeçalhos ou claims extras são recusados. A verificação não busca chaves remotas.
+
+O resultado é `AccessTokenClaims`, com identificadores e datas tipados. Tokens
+inválidos produzem `InvalidAccessToken` uniforme, sem retornar token, claims ou
+detalhes da biblioteca no erro. Não há tokens retornados pela API nesta etapa.
+
+Uma assinatura válida não comprova usuário ativo, sessão não revogada ou acesso
+a um recurso. Os futuros serviços de login e `get_current_user` deverão consultar
+usuário/sessão e autorizar o proprietário de cada recurso. Cookies, CSRF, refresh
+rotativo, logout e rotação de chaves terão implementação própria. Alterar a chave
+de assinatura invalida a verificação dos tokens emitidos com a chave anterior.
+
+Os testes usam chaves e identidades sintéticas, relógio controlado e assinaturas
+reais. Cobrem adulteração, algoritmos indevidos, claims ausentes/malformadas,
+expiração, configuração e privacidade, além das regressões existentes.

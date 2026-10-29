@@ -1,5 +1,6 @@
 """Validated configuration loaded from the environment or the root .env file."""
 
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -32,6 +33,31 @@ class Settings(BaseSettings):
     registration_requests_per_minute: int = Field(default=5, ge=1, le=100)
     registration_client_capacity: int = Field(default=4096, ge=1, le=65536)
     registration_concurrent_hashes: int = Field(default=2, ge=1, le=8)
+    jwt_signing_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
+    jwt_issuer: str = Field(default="finsight-api", min_length=1, max_length=120)
+    jwt_audience: str = Field(default="finsight-web", min_length=1, max_length=120)
+    jwt_access_ttl_seconds: int = Field(default=900, ge=60, le=900)
+
+    @field_validator("jwt_signing_key")
+    @classmethod
+    def validate_jwt_signing_key(cls, key: SecretStr | None) -> SecretStr | None:
+        if key is not None and re.fullmatch(r"[0-9a-fA-F]{64}", key.get_secret_value()) is None:
+            raise ValueError("JWT signing key must contain exactly 64 hexadecimal characters")
+        return key
+
+    @field_validator("jwt_issuer", "jwt_audience", mode="before")
+    @classmethod
+    def trim_jwt_identifier(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("jwt_issuer", "jwt_audience")
+    @classmethod
+    def validate_jwt_identifier_unicode(cls, value: str) -> str:
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError("JWT identifiers must contain valid Unicode") from None
+        return value
 
     @field_validator("db_password")
     @classmethod
