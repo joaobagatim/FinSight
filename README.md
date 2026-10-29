@@ -7,10 +7,9 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 A infraestrutura da Fase 0 está implementada. A Fase 1 adiciona modelos e migrações
 de usuários, sessões, contas, categorias, prévias de importação,
 transações, transferências, metas e alocações, além do cadastro de usuários.
-Há também primitivas internas de access JWT. Login e controle de sessões ainda
-serão implementados.
-A persistência técnica de hashes de refresh tokens consumidos prepara a futura
-detecção de reutilização, junto de helpers internos para tokens opacos.
+Há também primitivas de access JWT, serviço interno de sessões com rotação e
+revogação por reutilização de refresh, além de helpers de cookies e CSRF.
+Endpoints de autenticação e sua integração HTTP serão implementados depois.
 As funcionalidades financeiras descritas acima fazem parte do escopo planejado.
 
 A API inicial oferece `GET /health`. Execute na raiz do repositório:
@@ -385,8 +384,8 @@ Validação completa de e-mail e hashing Argon2id são realizados pelo cadastro 
 
 As sessões referenciam um usuário, exigem hash de refresh único e expiração
 posterior à criação. Revogação e último uso são opcionais e não podem anteceder
-a criação. Os campos armazenam hashes; ainda não existe serviço que gere,
-valide ou renove tokens. O schema não verifica criptograficamente um hash.
+a criação. Os campos armazenam hashes; o serviço interno descrito ao final
+gera e renova tokens. O schema não verifica criptograficamente um hash.
 A exclusão de um usuário com sessões é recusada pelo banco, sem cascade automático.
 
 Para inspecionar a estrutura no DBeaver sem consultar hashes ou dados pessoais:
@@ -636,7 +635,8 @@ Para criação válida e e-mail já cadastrado, a resposta é sempre **HTTP 200*
 Uma duplicata não altera nome, senha ou estado do usuário existente. A resposta
 não permite distinguir essas situações por status ou corpo e não confirma que
 um login terá sucesso. Não há garantia de tempos de resposta idênticos.
-Login, refresh, cookies, CSRF de sessões e interface de cadastro são etapas futuras.
+Serviços/helpers internos de sessão estão descritos ao final; sua integração
+HTTP e a interface de cadastro permanecem para etapas futuras.
 
 | Status | Situação |
 | --- | --- |
@@ -672,8 +672,9 @@ valida contrato/privacidade/OpenAPI e 503 em servidor isolado sem banco.
 ## Primitivas internas de access JWT
 
 `AccessTokenService`, em `backend/app/core/tokens.py`, emite e verifica access
-tokens para uso dos futuros serviços de autenticação. Esta unidade não adiciona
-endpoint, cookie, login ou persistência de sessão. O cadastro mantém seu contrato.
+tokens para uso do serviço interno de sessões. O módulo JWT não consulta o
+banco ou define cookies; endpoints ainda não expõem esses tokens. O cadastro
+mantém seu contrato.
 
 A assinatura usa PyJWT com **HS256 fixo** e chave de 32 bytes aleatórios. Configure
 `FINSIGHT_JWT_SIGNING_KEY` com a representação hexadecimal de 64 caracteres dessa
@@ -716,9 +717,10 @@ inválidos produzem `InvalidAccessToken` uniforme, sem retornar token, claims ou
 detalhes da biblioteca no erro. Não há tokens retornados pela API nesta etapa.
 
 Uma assinatura válida não comprova usuário ativo, sessão não revogada ou acesso
-a um recurso. Os futuros serviços de login e `get_current_user` deverão consultar
-usuário/sessão e autorizar o proprietário de cada recurso. Cookies, CSRF, refresh
-rotativo, logout e rotação de chaves terão implementação própria. Alterar a chave
+a um recurso. O serviço interno descrito abaixo consulta usuário/sessão; a
+dependência HTTP `get_current_user` e autorização de cada recurso serão
+integradas depois. Cookies/CSRF e refresh possuem helpers próprios; a rotação
+operacional de chaves ainda não foi implementada. Alterar a chave
 de assinatura invalida a verificação dos tokens emitidos com a chave anterior.
 
 Os testes usam chaves e identidades sintéticas, relógio controlado e assinaturas
@@ -755,11 +757,9 @@ Tokens aleatórios têm alta entropia e usam digest para consulta; senhas humana
 continuam protegidas por Argon2id. Nenhum helper grava `.env`, cria sessão,
 emite cookie ou expõe token por endpoint nesta etapa.
 
-Essa estrutura prepara RF-004/RNF-004. Ainda não existe rotação/revogação ou
-detecção funcional de replay. O futuro serviço deverá trocar o hash atual e
-registrar o consumido na mesma transação, verificar reutilização e persistir
-eventual revogação antes de responder ao cliente. Login, cookies/CSRF, renovação,
-logout e perfil próprio serão implementados nas próximas etapas da mesma branch.
+Essa estrutura sustenta o serviço interno de sessões descrito abaixo. Endpoints
+de login, renovação, logout e perfil próprio ainda não estão expostos. A ligação
+HTTP e seus limites serão implementados na próxima etapa da mesma branch.
 
 Não há limpeza automática. O histórico deve permanecer disponível durante a
 validade da sessão; a política operacional de retenção/expurgo será definida
@@ -770,3 +770,74 @@ de segurança e autorização própria em ambientes com sessões reais.
 Os testes usam dados sintéticos e PostgreSQL descartável para validar FK,
 unicidade, formato, UTC, restrição de exclusão e preservação dos registros
 anteriores no upgrade/downgrade. Não executam migrations no banco pessoal.
+
+## Ciclo interno de sessões e proteção de cookies
+
+`backend/app/services/sessions.py` fornece `SessionService`: login, refresh,
+autenticação de access JWT com consulta ao banco e revogação por credencial.
+Cada operação possui sua própria sessão SQLAlchemy e transação. O cadastro,
+health, CORS e frontend continuam com seus contratos atuais; esses serviços e
+helpers ainda não estão conectados a endpoints de autenticação.
+
+O login normaliza o e-mail, preserva a senha e verifica Argon2id. Usuários
+desconhecidos passam por verificação com hash dummy em memória; isso reduz
+diferenças de caminho sem garantir tempos iguais. Usuário inexistente/inativo
+ou senha errada recebem a mesma negação interna. Depois da verificação, o
+serviço bloqueia e relê usuário/hash para conferir mudanças concorrentes.
+
+Cada login cria uma sessão independente. Refresh usa token opaco aleatório,
+guardando somente digest. O prazo padrão é **sete dias absolutos**, configurável
+entre uma hora e sete dias por `FINSIGHT_AUTH_REFRESH_TTL_SECONDS`. Renovar não
+estende esse prazo. Access JWT mantém o prazo configurado, padrão15minutos; o
+acesso efetivo e o cookie também respeitam a expiração da sessão.
+
+Na renovação, o serviço bloqueia User antes de UserSession, relê os dados e
+atualiza o digest atual, o histórico consumido e last_used_at atomicamente.
+Credenciais só são entregues após o commit. Reutilizar um digest consumido
+conhecido revoga a sessão; a revogação é confirmada antes de retornar a negação.
+Token desconhecido ou UUID isolado não autoriza revogar uma sessão.
+
+A política de concorrência é estrita: dois refreshes com o mesmo token podem
+resultar em uma emissão inicial seguida de revogação da sessão. Isso também
+invalida a emissão inicial nas próximas verificações e pode exigir novo login
+após uma corrida legítima. O cliente futuro deverá serializar renovações. Não
+há janela de tolerância ou armazenamento de tokens brutos para reenvio.
+
+`authenticate()` valida assinatura/claims e consulta o vínculo usuário/sessão:
+sub/sid devem corresponder, o usuário deve estar ativo e a sessão deve estar
+criada, válida e não revogada. Logout interno exige refresh conhecido ou access
+JWT assinado com vínculo válido; é idempotente e não afeta outras sessões.
+Novas verificações são negadas após revogação; requisições em andamento não são
+canceladas. Resultados internos excluem credenciais de repr e serialização.
+
+`backend/app/core/csrf.py` implementa double-submit assinado HMAC-SHA256,
+vinculado a contexto aleatório de pré-login ou sessão verificada pelo servidor,
+com propósitos separados. Cookie/header devem coincidir, assinatura e prazo
+devem ser válidos. O token é limitado a 256 bytes e não é de uso único. Origens
+de mutações precisam constar em `FINSIGHT_AUTH_ALLOWED_ORIGINS`; ausência/null
+ou origem desconhecida é negada. SameSite e CORS não substituem CSRF.
+
+Configure `FINSIGHT_AUTH_CSRF_SIGNING_KEY` separadamente da chave JWT: 32 bytes
+aleatórios representados por 64 caracteres hexadecimais. As duas chaves não podem ser iguais. Não
+há geração automática, chave padrão ou gravação em `.env`. O exemplo comentado
+é inutilizável; nunca publique chaves reais. Prazo CSRF padrão de 900 segundos,
+configurável entre 60–3600 por `FINSIGHT_AUTH_CSRF_TTL_SECONDS`.
+
+`backend/app/core/auth_cookies.py` define cookies host-only, Path=/,
+SameSite=Lax. Em HTTPS seguro usa prefixo `__Host-finsight-` e Secure; access,
+refresh e pré-login são HttpOnly. Somente o cookie CSRF é legível pelo cliente
+para cópia ao header. Expiração é limitada pelos prazos correspondentes;
+exclusão repete os atributos. Cookies duplicados ou cabeçalhos acima de 16 KiB são
+recusados, e credenciais não ficam em JSON ou localStorage pelos helpers.
+
+`FINSIGHT_AUTH_COOKIE_SECURE` é true por padrão. O `.env.example` demonstra
+false explicitamente para HTTP de desenvolvimento/teste: exige hostname local
+e cliente ASGI em loopback, sem confiar em X-Forwarded-*. Nesse caso os nomes
+são `finsight_access`, `finsight_refresh`, `finsight_preauth`, `finsight_csrf`.
+Produção exige true/HTTPS e origens HTTPS. Proxies precisarão de configuração
+de confiança própria antes de produção.
+
+CSRF/cookies são helpers internos, sem proteção HTTP ativa nesta etapa. A etapa
+seguinte integrará bootstrap, login/refresh/logout/perfil, limites de recursos,
+CORS explícito com credenciais e testes HTTP/navegador com PostgreSQL isolado.
+Nenhuma tela financeira ou de autenticação foi acrescentada aqui.
