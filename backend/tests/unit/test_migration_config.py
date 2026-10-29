@@ -15,16 +15,19 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 CONFIG_PATH = BACKEND_DIR / "alembic.ini"
 
 
-def test_revision_graph_preserves_prior_revisions_and_has_one_goal_head():
+def test_revision_graph_preserves_prior_revisions_and_has_one_refresh_history_head():
     script = ScriptDirectory.from_config(Config(str(CONFIG_PATH)))
-    assert script.get_heads() == ["0006_goals_allocations"]
+    assert script.get_heads() == ["0007_refresh_token_history"]
     assert script.get_bases() == ["0001_phase0"]
     assert script.get_revision("0001_phase0").down_revision is None
     assert script.get_revision("0002_identity").down_revision == "0001_phase0"
     assert script.get_revision("0003_accounts_categories").down_revision == "0002_identity"
     assert script.get_revision("0004_imports").down_revision == "0003_accounts_categories"
     assert script.get_revision("0005_transactions_transfers").down_revision == "0004_imports"
-    assert script.get_revision("head").down_revision == "0005_transactions_transfers"
+    assert (
+        script.get_revision("0006_goals_allocations").down_revision == "0005_transactions_transfers"
+    )
+    assert script.get_revision("head").down_revision == "0006_goals_allocations"
 
 
 def test_template_generates_an_importable_revision_outside_the_repository(tmp_path):
@@ -33,7 +36,7 @@ def test_template_generates_an_importable_revision_outside_the_repository(tmp_pa
     config = Config(str(CONFIG_PATH))
     config.set_main_option("script_location", str(scripts))
     revision = command.revision(config, message="synthetic template probe", rev_id="template_probe")
-    assert revision.down_revision == "0006_goals_allocations"
+    assert revision.down_revision == "0007_refresh_token_history"
     assert callable(revision.module.upgrade)
     assert callable(revision.module.downgrade)
     assert ScriptDirectory.from_config(config).get_heads() == ["template_probe"]
@@ -70,7 +73,8 @@ def test_offline_sql_is_independent_of_cwd_database_and_credentials(tmp_path, wo
     assert "CREATE TABLE transfers" in result.stdout
     assert "CREATE TABLE financial_goals" in result.stdout
     assert "CREATE TABLE goal_allocations" in result.stdout
-    assert result.stdout.count("CREATE TABLE") == 11
+    assert "CREATE TABLE refresh_token_history" in result.stdout
+    assert result.stdout.count("CREATE TABLE") == 12
     assert marker not in result.stdout + result.stderr
     assert "invalid.invalid" not in result.stdout + result.stderr
 

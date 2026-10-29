@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 if TYPE_CHECKING:
+    from app.models.refresh_token_history import RefreshTokenHistory
     from app.models.user import User
 
 
@@ -44,3 +45,6 @@ class UserSession(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     user: Mapped["User"] = relationship(back_populates="sessions")
+    used_refresh_tokens: Mapped[list["RefreshTokenHistory"]] = relationship(
+        back_populates="session", passive_deletes="all"
+    )

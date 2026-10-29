@@ -9,6 +9,8 @@ de usuários, sessões, contas, categorias, prévias de importação,
 transações, transferências, metas e alocações, além do cadastro de usuários.
 Há também primitivas internas de access JWT. Login e controle de sessões ainda
 serão implementados.
+A persistência técnica de hashes de refresh tokens consumidos prepara a futura
+detecção de reutilização, junto de helpers internos para tokens opacos.
 As funcionalidades financeiras descritas acima fazem parte do escopo planejado.
 
 A API inicial oferece `GET /health`. Execute na raiz do repositório:
@@ -315,13 +317,15 @@ backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini check
 `0004_imports` cria `import_jobs` e `import_rows`;
 `0005_transactions_transfers` cria `transactions`/`transfers` e acrescenta
 a chave composta de proprietário/id/tipo em categorias;
-`0006_goals_allocations` cria `financial_goals` e `goal_allocations`.
+`0006_goals_allocations` cria `financial_goals` e `goal_allocations`;
+`0007_refresh_token_history` acrescenta a tabela técnica `refresh_token_history`.
 O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
 domínio estão modeladas; autenticação e autorização HTTP ainda serão implementadas.
 Repetir o upgrade mantém a mesma revisão. A aplicação
 não executa migrações automaticamente ao iniciar. `check` compara o banco com
 `Base.metadata`, com identidade, contas, categorias, importações, transações,
-transferências, metas e alocações; tabelas manuais podem ser identificadas como divergências.
+transferências, metas, alocações e histórico de refresh; tabelas manuais podem ser
+identificadas como divergências.
 Revise qualquer migração gerada antes de aplicá-la.
 
 Para visualizar o SQL sem abrir conexão ou ler credenciais:
@@ -341,13 +345,18 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0006_goals_allocations` e as onze tabelas `alembic_version`, `users`,
+`0007_refresh_token_history` e as doze tabelas `alembic_version`, `users`,
 `user_sessions`, `accounts`, `categories`, `import_jobs`, `import_rows`,
-`transactions`, `transfers`, `financial_goals` e `goal_allocations`.
+`transactions`, `transfers`, `financial_goals`, `goal_allocations` e
+`refresh_token_history`.
 Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
 são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
-O rollback de teste `downgrade 0005_transactions_transfers` remove metas/alocações,
+O rollback de teste `downgrade 0006_goals_allocations` remove somente o histórico
+de hashes consumidos. Isso elimina informação necessária à futura detecção de
+reutilização; em um ambiente com sessões reais, é necessário analisar e revogar
+sessões antes de remover esse histórico, com autorização específica.
+`downgrade 0005_transactions_transfers` remove também metas/alocações,
 preservando as tabelas anteriores. `downgrade 0004_imports` remove também transações/transferências e a
 chave técnica de categoria/tipo acrescentada nesta revisão, preservando os dados
 das tabelas anteriores. `downgrade 0003_accounts_categories` remove também jobs/linhas,
@@ -715,3 +724,49 @@ de assinatura invalida a verificação dos tokens emitidos com a chave anterior.
 Os testes usam chaves e identidades sintéticas, relógio controlado e assinaturas
 reais. Cobrem adulteração, algoritmos indevidos, claims ausentes/malformadas,
 expiração, configuração e privacidade, além das regressões existentes.
+
+## Histórico técnico de refresh tokens
+
+A revisão `0007_refresh_token_history` cria uma tabela vazia para guardar digests
+de refresh tokens consumidos. As dez tabelas de domínio e seus dados são
+preservados. A aplicação não executa migrações automaticamente.
+
+| Campo | Regra |
+| --- | --- |
+| `id` | UUIDv4 gerado pela aplicação |
+| `session_id` | FK obrigatória para `user_sessions.id`, com exclusão RESTRICT e índice |
+| `token_hash` | Digest SHA-256 em 64 caracteres hexadecimais minúsculos, obrigatório e único |
+| `used_at` | Timestamp com fuso, obrigatório, default do banco; conexões em UTC |
+
+O proprietário é derivado de `UserSession`, sem duplicar `user_id`. A tabela não
+armazena token bruto, access JWT, senha, IP ou user-agent. A relação ORM
+`UserSession.used_refresh_tokens` mantém a exclusão restrita mesmo quando a
+coleção está carregada. Isso não representa uma auditoria imutável.
+
+Em `backend/app/core/refresh_tokens.py`, `generate_refresh_token()` usa
+`secrets.token_urlsafe(32)` e retorna `SecretStr`: 32 bytes aleatórios (256 bits),
+em 43 caracteres base64url sem padding. `refresh_token_digest()` exige essa
+representação canônica antes de calcular SHA-256 do texto ASCII. Erros de formato
+são uniformes, sem ecoar a credencial; entradas excessivas são recusadas antes
+da decodificação e do hashing. O formato não comprova aleatoriedade: credenciais
+emitidas devem vir do gerador criptográfico, e não de exemplos ou fixtures.
+
+Tokens aleatórios têm alta entropia e usam digest para consulta; senhas humanas
+continuam protegidas por Argon2id. Nenhum helper grava `.env`, cria sessão,
+emite cookie ou expõe token por endpoint nesta etapa.
+
+Essa estrutura prepara RF-004/RNF-004. Ainda não existe rotação/revogação ou
+detecção funcional de replay. O futuro serviço deverá trocar o hash atual e
+registrar o consumido na mesma transação, verificar reutilização e persistir
+eventual revogação antes de responder ao cliente. Login, cookies/CSRF, renovação,
+logout e perfil próprio serão implementados nas próximas etapas da mesma branch.
+
+Não há limpeza automática. O histórico deve permanecer disponível durante a
+validade da sessão; a política operacional de retenção/expurgo será definida
+antes de produção. Remover a tabela perde digests consumidos. O downgrade para
+`0006_goals_allocations` preserva as dez tabelas anteriores, mas requer revisão
+de segurança e autorização própria em ambientes com sessões reais.
+
+Os testes usam dados sintéticos e PostgreSQL descartável para validar FK,
+unicidade, formato, UTC, restrição de exclusão e preservação dos registros
+anteriores no upgrade/downgrade. Não executam migrations no banco pessoal.
