@@ -15,6 +15,10 @@ def test_defaults_deny_cross_origin_requests():
     assert settings.registration_requests_per_minute == 5
     assert settings.registration_client_capacity == 4096
     assert settings.registration_concurrent_hashes == 2
+    assert settings.jwt_signing_key is None
+    assert settings.jwt_issuer == "finsight-api"
+    assert settings.jwt_audience == "finsight-web"
+    assert settings.jwt_access_ttl_seconds == 900
 
 
 def test_environment_overrides_dotenv(tmp_path, monkeypatch):
@@ -117,3 +121,65 @@ def test_validation_errors_hide_raw_database_password():
         )
 
     assert marker not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        " ",
+        "not-a-key",
+        "<64-hex-characters-generated-locally>",
+        "a" * 63,
+        "a" * 65,
+        "g" * 64,
+        "a" * 63 + " ",
+    ],
+)
+def test_invalid_jwt_signing_configuration_is_rejected_without_echo(value):
+    with pytest.raises(ValidationError) as error:
+        Settings(_env_file=None, jwt_signing_key=value)
+    if value.strip():
+        assert value not in str(error.value)
+
+
+@pytest.mark.parametrize("value", [bytes(range(32)).hex(), bytes(range(32)).hex().upper()])
+def test_valid_jwt_key_is_excluded_from_diagnostics_and_exports(value):
+    settings = Settings(_env_file=None, jwt_signing_key=value)
+    assert settings.jwt_signing_key.get_secret_value() == value
+    assert "jwt_signing_key" not in settings.model_dump()
+    assert value not in repr(settings) + settings.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"jwt_issuer": ""},
+        {"jwt_issuer": " "},
+        {"jwt_issuer": "a" * 121},
+        {"jwt_audience": ""},
+        {"jwt_audience": " "},
+        {"jwt_audience": "a" * 121},
+        {"jwt_access_ttl_seconds": 59},
+        {"jwt_access_ttl_seconds": 901},
+        {"jwt_issuer": "\ud800"},
+        {"jwt_audience": "\ud800"},
+    ],
+)
+def test_invalid_jwt_identifiers_and_lifetimes_are_rejected(changes):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **changes)
+
+
+def test_jwt_configuration_precedence_and_identifier_normalization(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_text(
+        "FINSIGHT_JWT_ISSUER=file-api\nFINSIGHT_JWT_ACCESS_TTL_SECONDS=120\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("FINSIGHT_JWT_ISSUER", "env-api")
+    monkeypatch.setenv("FINSIGHT_JWT_SIGNING_KEY", bytes(range(32)).hex())
+    settings = Settings(_env_file=path, jwt_audience=" web ")
+    assert settings.jwt_issuer == "env-api" and settings.jwt_audience == "web"
+    assert settings.jwt_access_ttl_seconds == 120
+    assert settings.jwt_signing_key is not None
+    assert Settings(_env_file=path, jwt_issuer="constructor-api").jwt_issuer == "constructor-api"
