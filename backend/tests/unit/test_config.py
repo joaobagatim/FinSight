@@ -12,6 +12,7 @@ def test_session_security_defaults_and_secret_exclusion():
     assert settings.auth_csrf_ttl_seconds == 900
     assert settings.auth_cookie_secure is True
     assert settings.auth_allowed_origins == []
+    assert settings.auth_password_change_requests_per_minute == 5
     for output in (repr(settings), str(settings.model_dump()), settings.model_dump_json()):
         assert "ab" * 32 not in output
         assert "cd" * 32 not in output
@@ -51,6 +52,12 @@ def test_invalid_session_security_configuration(kwargs):
 def test_invalid_http_limits(name, value):
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **{name: value})
+
+
+@pytest.mark.parametrize("value", [0, 101])
+def test_invalid_password_change_limit(value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, auth_password_change_requests_per_minute=value)
 
 
 def test_defaults_deny_cross_origin_requests():

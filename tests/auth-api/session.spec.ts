@@ -1,46 +1,12 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
+import { privateApi, loginSession, sessionCsrf as csrf } from '../support/session-client.js'
 
 const origin = 'http://127.0.0.1:4175'
 const prefix = '/api/v1/auth/'
 const password = 'synthetic session password'
 
-function privateApi(api: APIRequestContext): APIRequestContext {
-  return new Proxy(api, {
-    get(target, key) {
-      const value = Reflect.get(target, key)
-      if (typeof value !== 'function') return value
-      return async (...args: unknown[]) => {
-        try {
-          return await Reflect.apply(value, target, args)
-        } catch {
-          // Never report Playwright call logs containing Cookie/CSRF/password values.
-          throw new Error('Isolated API operation failed; sensitive details suppressed.')
-        }
-      }
-    },
-  })
-}
-
 async function login(api: APIRequestContext, name = 'alice') {
-  const bootstrap = await api.post(prefix + 'csrf', {
-    data: {},
-    headers: { Origin: origin, 'X-CSRF-Bootstrap': '1' },
-  })
-  expect(bootstrap.status()).toBe(200)
-  const { csrf_token: csrf } = await bootstrap.json()
-  const response = await api.post(prefix + 'login', {
-    data: { email: `${name}@example.com`, password },
-    headers: { Origin: origin, 'X-CSRF-Token': csrf },
-  })
-  expect(response.status()).toBe(204)
-  expect((await response.body()).length).toBe(0)
-}
-
-async function csrf(api: APIRequestContext) {
-  const state = await api.storageState()
-  const value = state.cookies.find((cookie) => cookie.name === 'finsight_csrf')?.value
-  if (!value) throw new Error('Session CSRF cookie is missing.')
-  return value
+  await loginSession(api, `${name}@example.com`, password)
 }
 
 test('session round trip and two independent users', async ({ request, playwright }) => {

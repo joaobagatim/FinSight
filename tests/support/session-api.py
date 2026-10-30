@@ -34,6 +34,7 @@ def run():
         auth_cookie_secure=False,
         auth_allowed_origins=["http://127.0.0.1:4175"],
         auth_login_requests_per_minute=100,
+        auth_password_change_requests_per_minute=100,
         auth_requests_per_minute=1000,
         registration_requests_per_minute=100,
     )

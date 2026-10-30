@@ -41,6 +41,11 @@ class SessionBindingMismatch(AuthenticationDenied):
     """Recognized conflicting credentials must never select a different context."""
 
 
+class PasswordChangeRejected(Exception):
+    def __init__(self):
+        super().__init__("Password change rejected")
+
+
 @lru_cache(maxsize=1)
 def _dummy_hash() -> str:
     return hash_password(secrets.token_urlsafe(32))
@@ -249,6 +254,65 @@ class SessionService:
             return self._tokens.verify(token)
         except InvalidAccessToken:
             raise AuthenticationDenied() from None
+
+    def change_password(
+        self, token: str | SecretStr, current_password: SecretStr, new_password: SecretStr
+    ) -> None:
+        """Reauthenticate, replace the hash and revoke every owned session atomically."""
+        claims = self._claims(token)
+        if not all(isinstance(value, SecretStr) for value in (current_password, new_password)):
+            raise PasswordChangeRejected()
+        current, replacement = current_password.get_secret_value(), new_password.get_secret_value()
+        for value in (current, replacement):
+            if not 15 <= len(value) <= 128 or not value.strip():
+                raise PasswordChangeRejected()
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError:
+                raise PasswordChangeRejected() from None
+        with self._transaction() as session:
+            pair = session.execute(
+                select(User, UserSession)
+                .join(UserSession, UserSession.user_id == User.id)
+                .where(User.id == claims.user_id, UserSession.id == claims.session_id)
+            ).one_or_none()
+            now = self._now()
+            if (
+                pair is None
+                or not self._live(*pair, now)
+                or not claims.not_before <= now < claims.expires_at
+            ):
+                raise AuthenticationDenied()
+            encoded = pair[0].password_hash
+            if not verify_password(current, encoded):
+                raise AuthenticationDenied()
+            if current == replacement:
+                raise PasswordChangeRejected()
+            new_hash = hash_password(replacement)
+            user, row = self._lock(session, claims.user_id, claims.session_id)
+            # Re-read after locks: an old password/login/session must not survive a race.
+            claims = self._claims(token)
+            now = self._now()
+            if (
+                not self._live(user, row, now)
+                or user.password_hash != encoded
+                or not claims.not_before <= now < claims.expires_at
+            ):
+                raise AuthenticationDenied()
+            sessions = session.scalars(
+                select(UserSession)
+                .where(UserSession.user_id == user.id)
+                .order_by(UserSession.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).all()
+            if any(item.revoked_at is None and item.created_at > now for item in sessions):
+                raise SessionUnavailable()
+            user.password_hash = new_hash
+            for item in sessions:
+                if item.revoked_at is None:
+                    item.revoked_at = now
+            session.flush()
 
     def csrf_binding(
         self, *, refresh: SecretStr | None = None, access: SecretStr | None = None

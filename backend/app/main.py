@@ -11,6 +11,7 @@ from app.api.auth import router as auth_router
 from app.api.error_handlers import registration_validation_error
 from app.api.health import router as health_router
 from app.api.session_auth import router as session_router
+from app.api.users import router as users_router
 from app.core.auth_cookies import CookiePolicyRejected
 from app.core.config import Settings
 from app.core.csrf import CsrfConfigurationError, CsrfRejected
@@ -24,7 +25,7 @@ from app.core.session_http import (
 from app.core.tokens import TokenConfigurationError
 from app.db.session import Database
 from app.services.registration import RegistrationUnavailable
-from app.services.sessions import AuthenticationDenied, SessionUnavailable
+from app.services.sessions import AuthenticationDenied, PasswordChangeRejected, SessionUnavailable
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -71,6 +72,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def unavailable(_request, _error):
         return JSONResponse({"detail": "Authentication temporarily unavailable"}, status_code=503)
 
+    @application.exception_handler(PasswordChangeRejected)
+    async def password_change_rejected(_request, _error):
+        return JSONResponse({"detail": "Password change rejected"}, status_code=422)
+
     @application.exception_handler(Exception)
     async def unexpected_error(request, _error):
         if request.url.path in SESSION_PATHS:
@@ -99,4 +104,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(health_router)
     application.include_router(auth_router)
     application.include_router(session_router)
+    application.include_router(users_router)
     return application
