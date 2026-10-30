@@ -876,8 +876,8 @@ prepara pré-login e limpa cookies locais; logout com esse contexto apenas apaga
 cookies, sem revogar qualquer sessão por UUID fornecido pelo cliente.
 
 `GET /me` deriva o proprietário de credenciais validadas no backend, mesmo que
-uma query forneça outro `user_id`. Não há edição de perfil, troca/recuperação de
-senha ou autorização de operações financeiras nesta entrega.
+uma query forneça outro `user_id`. A alteração de senha está descrita abaixo;
+edição de perfil, recuperação de senha e autorização financeira seguem pendentes.
 
 | Erro | Significado |
 | --- | --- |
@@ -893,7 +893,7 @@ CSRF válido limpa cookies locais;503/429 preservam credenciais para nova tentat
 Consulta de perfil negada não altera cookies. Cabeçalhos de segurança e cookies
 duplicados são recusados antes de decisões mutáveis.
 
-CORS com credenciais se aplica somente às cinco rotas novas e a
+CORS com credenciais se aplica somente às rotas de sessão e alteração de senha, com
 `FINSIGHT_AUTH_ALLOWED_ORIGINS`. Cadastro/health mantêm CORS sem credenciais.
 O navegador usa `credentials: 'include'`; no desenvolvimento, use o mesmo host
 no frontend e API (ambos `localhost` ou ambos `127.0.0.1`). Misturar esses hosts
@@ -920,7 +920,7 @@ O global setup aplica migrations apenas nesse contêiner, gera chaves efêmeras
 em memória e cria usuários pelo cadastro HTTP. Teardown encerra somente processo
 e contêiner próprios, também em falhas de preparação. Encerramento forçado da
 máquina pode impedir cleanup; inspecione o nome UUID específico em
-`.cache/session-http-validation/playwright-cleanup.json` e remova somente esse
+`test-results/auth-cleanup.json` e remova somente esse
 recurso depois de confirmar sua propriedade. Nunca execute limpeza global.
 
 Relatórios ficam em `test-results/` e `playwright-report/`, ignorados pelo Git.
@@ -928,3 +928,50 @@ Os projetos de sessão desabilitam traces, screenshots, vídeo e persistência d
 storageState para não gravar cookies/tokens. Asserções exibem status e campos
 sintéticos seguros. O CI executa os dois conjuntos; seu resultado depende da
 publicação e aprovação do PR.
+
+## Alterar a própria senha
+
+`POST /api/v1/users/me/change-password` implementa RF-007. Exige access válido no
+cookie, usuário/sessão ativos, origem autorizada, CSRF vinculado à sessão e
+confirmação da senha atual. O corpo JSON aceita somente `current_password` e
+`new_password`, ambas com 15–128 caracteres Unicode válidos. Espaços são preservados;
+senha composta apenas por espaços é inválida. Identificadores e tokens no corpo
+são recusados. A nova senha deve diferir da atual, sem outras regras de composição
+ou histórico de senhas antigas nesta entrega.
+
+Depois de verificar a senha atual com Argon2id, o serviço bloqueia e relê o usuário
+e a sessão para conferir expiração, revogação e mudanças concorrentes. Na mesma
+transação, substitui o hash e revoga todas as sessões do proprietário, inclusive
+a atual. Sessões de outros usuários e timestamps de revogações anteriores são
+preservados. Os locks seguem a ordem User antes de UserSession, compartilhada com
+login/refresh/logout. Falha de banco/commit ou relógio anterior à criação de uma
+sessão a revogar causa rollback integral, sem datas corrigidas silenciosamente.
+
+Sucesso retorna204 sem corpo apenas após commit e apaga os cookies locais. Será
+necessário entrar novamente com a nova senha em todos os dispositivos. Tokens
+antigos deixam de autenticar nas próximas verificações de banco; requisições em
+andamento não são canceladas. Se a resposta se perder depois do commit, não
+repetir automaticamente: a sessão antiga estará revogada; tentar novo login com
+a nova senha. Não há renovação automática de sessão ou envio de e-mail.
+
+| Resultado | Efeito |
+| --- | --- |
+| 204 | Senha alterada, sessões próprias revogadas, cookies locais apagados |
+| 401 | Senha atual ou autenticação negada; nenhuma mutação/cookie apagado |
+| 403 | Origem/CSRF/transporte inválido; nenhuma mutação |
+| 422 | Entrada inválida ou nova senha igual à atual após reautenticação |
+| 429 | Limite de requisições ou hashes; `Retry-After`, sem mutação |
+| 503 | Configuração/persistência/relógio indisponível, sem sucesso parcial |
+
+As respostas e erros usam no-store e não expõem senhas, hashes ou tokens.
+`FINSIGHT_AUTH_PASSWORD_CHANGE_REQUESTS_PER_MINUTE` limita cinco tentativas por
+minuto/IP/processo por padrão (configurável1–100), em bucket separado de login,
+dentro da capacidade total de clientes já existente. O corpo usa o limite de
+credenciais de16KiB. Cadastro/login/troca compartilham os mesmos slots de Argon2;
+não há fila nem limitação distribuída nesta entrega.
+
+Pytest valida isolamento, rollback e corridas com conexões PostgreSQL próprias.
+`npm run test:auth` inclui API/navegador com usuários sintéticos exclusivos por
+cenário, sem modificar alice/bob dos testes existentes. Não há UI de produto,
+novas dependências, schema ou migrations nesta alteração. Os testes continuam
+sem persistir traces, vídeo, screenshots ou estado de autenticação.

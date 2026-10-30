@@ -50,6 +50,9 @@ export default async function setup() {
   const uuid = randomUUID().replaceAll('-', '')
   const name = `finsight-pw-session-${uuid}`
   const dbName = `finsight_test_pw_${uuid}`
+  const cleanupPath = path.join(root, 'test-results/auth-cleanup.json')
+  await mkdir(path.dirname(cleanupPath), { recursive: true })
+  await writeFile(cleanupPath, JSON.stringify({ name, apiStopped: false, containerRemoved: false }))
   let created = false
   let child: ChildProcess | undefined
   const cleanup = async () => {
@@ -62,17 +65,23 @@ export default async function setup() {
       if (created) {
         await docker('stop', '--time', '5', name)
         for (let i = 0; i < 50; i++) {
-          try {
-            await docker('container', 'inspect', name)
-          } catch {
+          const remaining = await docker(
+            'container',
+            'ls',
+            '--all',
+            '--filter',
+            `name=^/${name}$`,
+            '--format',
+            '{{.ID}}',
+          )
+          if (!remaining) {
             removed = true
             break
           }
           await pause(100)
         }
-        await mkdir(path.join(root, '.cache/session-http-validation'), { recursive: true })
         await writeFile(
-          path.join(root, '.cache/session-http-validation/playwright-cleanup.json'),
+          cleanupPath,
           JSON.stringify({ name, apiStopped: stopped, containerRemoved: removed }),
         )
       }

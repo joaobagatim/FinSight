@@ -279,3 +279,46 @@ def test_unexpected_internal_error_is_static_and_not_cached():
         assert response.status_code == 500
         assert response.headers["cache-control"] == "no-store"
         assert "synthetic-private-marker" not in response.text
+
+
+def test_password_change_has_explicit_cors_and_independent_rate(client):
+    path = "/api/v1/users/me/change-password"
+    response = client.options(
+        path,
+        headers={
+            "Origin": ORIGIN,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-csrf-token",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-credentials"] == "true"
+    assert response.headers["cache-control"] == "no-store"
+    for _ in range(5):
+        assert client.post(path, json={}, headers={"Origin": ORIGIN}).status_code != 429
+    response = client.post(
+        path, json={}, headers={"Origin": ORIGIN, "X-Forwarded-For": "192.0.2.1"}
+    )
+    assert response.status_code == 429 and int(response.headers["retry-after"]) >= 1
+    # Separate bucket; changing password attempts do not consume the login quota.
+    assert client.post("/api/v1/auth/login", json={}).status_code != 429
+
+
+def test_password_change_header_guards_and_large_unicode_body(client):
+    path = "/api/v1/users/me/change-password"
+    response = client.post(path, json={}, headers=[("Origin", ORIGIN), ("Origin", ORIGIN)])
+    assert response.status_code == 403 and "set-cookie" not in response.headers
+    body = {"current_password": "\U0001f512" * 128, "new_password": "\U0001f513" * 128}
+    response = client.post(path, json=body, headers={"Origin": ORIGIN})
+    assert response.status_code == 401  # Valid-sized body reaches the missing-access guard.
+    response = client.post(path, content="x" * 16385, headers={"Content-Type": "application/json"})
+    assert response.status_code == 413 and response.headers["cache-control"] == "no-store"
+
+
+def test_password_change_bucket_shares_total_capacity_and_expires():
+    now = 0
+    limits = SessionHttpLimits(settings(auth_client_capacity=1), clock=lambda: now)
+    assert limits.admit("one", login=False, password_change=True) == 0
+    assert limits.admit("one", login=True) == 60
+    now = 61
+    assert limits.admit("one", login=True) == 0

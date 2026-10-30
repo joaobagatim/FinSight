@@ -11,8 +11,10 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.config import Settings
 
+PASSWORD_CHANGE_PATH = "/api/v1/users/me/change-password"
 SESSION_PATHS = frozenset(
-    f"/api/v1/auth/{name}" for name in ("csrf", "login", "refresh", "logout", "me")
+    {f"/api/v1/auth/{name}" for name in ("csrf", "login", "refresh", "logout", "me")}
+    | {PASSWORD_CHANGE_PATH}
 )
 _SINGLE_HEADERS = {b"origin", b"content-type", b"x-csrf-token", b"x-csrf-bootstrap"}
 
@@ -21,23 +23,28 @@ class SessionHttpLimits:
     def __init__(self, settings: Settings, clock: Callable[[], float] = time.monotonic):
         self.clock = clock
         self.login_rate = settings.auth_login_requests_per_minute
+        self.password_rate = settings.auth_password_change_requests_per_minute
         self.rate = settings.auth_requests_per_minute
         self.capacity = settings.auth_client_capacity
         self.clients: dict[tuple[str, str], tuple[float, int]] = {}
         self.lock = threading.Lock()
 
-    def admit(self, client: str, *, login: bool) -> int:
+    def admit(self, client: str, *, login: bool, password_change: bool = False) -> int:
         with self.lock:
             now = self.clock()
             self.clients = {key: row for key, row in self.clients.items() if row[0] > now}
-            key = ("login" if login else "session", client)
+            bucket = "password" if password_change else "login" if login else "session"
+            rate = (
+                self.password_rate if password_change else self.login_rate if login else self.rate
+            )
+            key = (bucket, client)
             if key not in self.clients:
                 if len(self.clients) >= self.capacity:
                     return max(1, math.ceil(min(row[0] for row in self.clients.values()) - now))
                 self.clients[key] = (now + 60, 1)
                 return 0
             end, count = self.clients[key]
-            if count >= (self.login_rate if login else self.rate):
+            if count >= rate:
                 return max(1, math.ceil(end - now))
             self.clients[key] = (end, count + 1)
             return 0
@@ -83,7 +90,9 @@ class SessionHttpMiddleware:
                     return
                 seen.add(key)
         retry = self.limits.admit(
-            (scope.get("client") or ("unknown",))[0], login=scope["path"] == "/api/v1/auth/login"
+            (scope.get("client") or ("unknown",))[0],
+            login=scope["path"] == "/api/v1/auth/login",
+            password_change=scope["path"] == PASSWORD_CHANGE_PATH,
         )
         if retry:
             await reject(429, "Authentication limit reached", retry)
@@ -100,7 +109,7 @@ class SessionHttpMiddleware:
             return
         bound = (
             self.settings.auth_login_body_bytes
-            if scope["path"].endswith("/login")
+            if scope["path"] in {"/api/v1/auth/login", PASSWORD_CHANGE_PATH}
             else self.settings.auth_body_bytes
         )
         body = bytearray()
