@@ -321,8 +321,8 @@ a chave composta de proprietário/id/tipo em categorias;
 `0008_account_creation_requests` acrescenta `account_creation_requests` para
 persistir futuras tentativas de criação de contas por usuário/chave.
 O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
-domínio estão modeladas; autenticação HTTP está disponível, mas os recursos
-financeiros e sua autorização HTTP ainda serão implementados.
+domínio estão modeladas; autenticação HTTP e cadastro/consulta de contas próprias
+estão disponíveis. Os demais recursos financeiros ainda serão implementados.
 Repetir o upgrade mantém a mesma revisão. A aplicação
 não executa migrações automaticamente ao iniciar. `check` compara o banco com
 `Base.metadata`, com identidade, contas, categorias, importações, transações,
@@ -1034,9 +1034,8 @@ Ele usa o PostgreSQL descartável e o teardown da configuração de autenticaç�
 
 ## Preparação da criação idempotente de contas
 
-A revisão `0008_account_creation_requests` prepara a persistência de uma tentativa
-de criação de conta. Esta etapa adiciona o armazenamento; os endpoints de contas
-e o tratamento de retries ainda não estão disponíveis.
+A revisão `0008_account_creation_requests` persiste tentativas de criação de
+contas. A API descrita abaixo usa esse armazenamento para tratar retries.
 
 A tabela técnica `account_creation_requests` guarda `user_id`, `idempotency_key`
 (UUIDv4), `request_hash` (SHA-256 em hexadecimal minúsculo), `account_id` e
@@ -1046,10 +1045,10 @@ composta exige que a conta pertença ao usuário informado. O banco também vali
 UUIDv4 e o formato do digest, inclusive para gravações que não passam pelo ORM.
 Há índice em usuário/conta para suportar consultas dessa relação.
 
-Não são armazenados corpos JSON, senhas, cookies ou tokens. O serviço futuro deverá
-calcular o digest da entrada normalizada e gravar conta e chave na mesma transação.
-Guardar uma chave, por si só, ainda não implementa replay, conflito ou concorrência
-HTTP. Nenhum saldo atual é calculado nesta etapa.
+Não são armazenados corpos JSON, senhas, cookies ou tokens. O serviço calcula o
+digest da entrada normalizada e grava conta e chave na mesma transação.
+O tratamento de replay/conflito está na API; as restrições do banco reforçam
+unicidade e propriedade. Nenhum saldo atual é calculado nesta etapa.
 
 Após aplicar a migração no banco correto, estas consultas de leitura podem ser
 usadas no DBeaver:
@@ -1083,3 +1082,79 @@ a API de criação existir, repetir uma operação antiga após o downgrade pode
 criar outra conta. Retenção e exclusão dessas chaves precisam de política própria;
 não há expurgo automático nesta etapa. Não aplique rollback em um banco em uso
 sem avaliação e autorização específicas.
+
+## Cadastrar, listar e consultar contas próprias
+
+A primeira entrega da Fase 2 implementa RF-010/RF-013:
+
+| Método e rota | Resultado |
+| --- | --- |
+| `POST /api/v1/accounts` | 201 com `{"id":"UUID"}` e cabeçalho `Location` |
+| `GET /api/v1/accounts` | Lista paginada somente das contas do usuário autenticado |
+| `GET /api/v1/accounts/{id}` | Dados da conta própria; conta alheia/inexistente retorna404 |
+
+Todas exigem cookies de autenticação e sessão ativa no banco. A criação exige
+também origem autorizada, `X-CSRF-Token` de sessão e `Idempotency-Key` com UUIDv4.
+Conhecer a chave de idempotência ou o UUID da conta não concede acesso.
+O proprietário vem da sessão; `id`, `user_id` e outros campos não previstos no
+corpo são recusados. Não envie tokens ou senhas no JSON.
+
+Exemplo de corpo, somente com dados fictícios:
+
+```json
+{
+  "name": "Conta de exemplo",
+  "type": "checking",
+  "currency": "BRL",
+  "opening_balance": "-10.25",
+  "opening_date": "2026-01-01"
+}
+```
+
+Nome tem1–100caracteres Unicode válidos, com espaços externos removidos. Os tipos
+são `checking`, `savings`, `cash` ou `investment`; moeda é somente `BRL` (padrão).
+Dinheiro deve ser string decimal finita, sem notação científica, com até duas
+casas e limite `9999999999999.99` em valor absoluto. Saldo inicial negativo é
+permitido. Números JSON e valores com mais casas decimais são recusados, sem
+arredondamento silencioso. A data deve ser uma data válida em `YYYY-MM-DD`.
+A abertura representa a posição ao final da data; não cria receita ou transação.
+
+Para repetir a mesma intenção de criação, preserve a chave e os dados. O serviço
+normaliza nome, data, moeda e Decimal antes de calcular SHA-256; `"0.1"` e `"0.10"`
+representam a mesma entrada, assim como zero e zero negativo. O mesmo
+usuário/chave/entrada retorna novamente201 com o mesmo id/Location, inclusive
+usando outra instância da API. Usar a mesma chave com dados diferentes retorna409,
+sem criar conta. Outra chave representa outra criação; nomes iguais não são
+deduplicados. Cada usuário possui seu próprio espaço de chaves.
+
+Usuário e sessão são relidos dentro da transação. A criação compartilha o lock de
+usuário com login/refresh/logout, evitando aceitar revogação concorrente; duas
+tentativas simultâneas com a mesma chave criam uma conta e um registro de retry.
+Conta e chave são confirmadas juntas. Falha de commit desfaz ambas. A serialização
+por usuário é uma escolha para o MVP, sem fila distribuída ou framework adicional.
+
+A listagem aceita `limit` (padrão50,1–100) e `offset` (0–2147483647). Retorna
+`items`, `limit`, `offset` e `has_more`, com ordem estável por criação/id. Inclui
+contas próprias ativas e arquivadas, com `is_active` explícito; filtros adicionais
+ainda não existem. Consulta/listagem retornam id, nome, tipo, moeda, saldo inicial
+como string com duas casas, data de abertura e atividade. Não expõem proprietário,
+hash de retry ou credenciais. Saldo atual, consolidado e histórico ainda não são
+calculados.
+
+Respostas usam `no-store`. CORS credenciado das contas aceitaGET/POST e os
+cabeçalhos necessários somente nas origens de autenticação configuradas. Corpos
+de criação têm limite16KiB; cabeçalhos duplicados de segurança/idempotência são
+recusados. As rotas compartilham o limite existente
+`FINSIGHT_AUTH_REQUESTS_PER_MINUTE` e a capacidade de clientes por processo;
+`X-Forwarded-For` não muda o cliente sem configuração de proxy confiável.
+
+Erros:401autenticação,403origem/CSRF,404conta ausente/alheia,409chave conflitante,
+422entrada/chave/paginação inválida,429limite e503indisponibilidade. As mensagens
+não repetem entradas nem dados de terceiros. Não há edição, arquivamento,
+exclusão ou interface de contas nesta entrega.
+
+É necessário aplicar a revisão0008 no banco correto antes de usar a criação;
+migrations não são executadas no startup. Os testes usam PostgreSQL descartável
+e usuários sintéticos. Para selecionar o cenário API novo:
+`npm run test:auth -- --project=session-api tests/auth-api/accounts.spec.ts`.
+A suíte completa continua no CI; localmente são executados novos/afetados.

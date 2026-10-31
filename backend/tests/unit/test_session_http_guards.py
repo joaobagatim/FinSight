@@ -351,3 +351,26 @@ def test_profile_patch_has_cors_body_guard_and_shared_sensitive_rate(client):
     response = client.patch(path, json={"name": "Synthetic"})
     assert response.status_code == 429 and response.headers["cache-control"] == "no-store"
     assert client.post("/api/v1/auth/login", json={}).status_code != 429
+
+
+def test_account_cors_and_duplicate_creation_keys_are_guarded(client):
+    path = "/api/v1/accounts"
+    response = client.options(
+        path,
+        headers={
+            "Origin": ORIGIN,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-csrf-token,idempotency-key",
+        },
+    )
+    assert (
+        response.status_code == 200
+        and response.headers["access-control-allow-credentials"] == "true"
+    )
+    assert client.get(path + "/00000000-0000-4000-8000-000000000000").status_code == 401
+    response = client.post(
+        path,
+        json={},
+        headers=[("Origin", ORIGIN), ("Idempotency-Key", "a"), ("Idempotency-Key", "b")],
+    )
+    assert response.status_code == 403 and response.headers["cache-control"] == "no-store"

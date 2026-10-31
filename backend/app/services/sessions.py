@@ -266,6 +266,31 @@ class SessionService:
         except InvalidAccessToken:
             raise AuthenticationDenied() from None
 
+    @contextmanager
+    def authorized_transaction(
+        self, token: str | SecretStr, *, lock: bool = False
+    ) -> Iterator[tuple[Session, AuthContext]]:
+        """Authorize within the resource transaction; mutations share the user lock."""
+        claims = self._claims(token)
+        with self._transaction() as session:
+            if lock:
+                pair = self._lock(session, claims.user_id, claims.session_id)
+            else:
+                pair = session.execute(
+                    select(User, UserSession)
+                    .join(UserSession, UserSession.user_id == User.id)
+                    .where(User.id == claims.user_id, UserSession.id == claims.session_id)
+                ).one_or_none()
+            claims = self._claims(token)
+            now = self._now()
+            if (
+                pair is None
+                or not self._live(*pair, now)
+                or not claims.not_before <= now < claims.expires_at
+            ):
+                raise AuthenticationDenied()
+            yield session, self._context(*pair)
+
     def change_password(
         self, token: str | SecretStr, current_password: SecretStr, new_password: SecretStr
     ) -> None:

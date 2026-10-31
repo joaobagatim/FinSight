@@ -4,7 +4,7 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.core.session_http import SESSION_PATHS
+from app.core.session_http import is_account_path, is_session_path
 
 REGISTRATION_PATH = "/api/v1/auth/register"
 
@@ -13,10 +13,14 @@ async def registration_validation_error(request: Request, error: RequestValidati
     # Only this endpoint currently accepts credentials. Preserve other API contracts.
     from fastapi.exception_handlers import request_validation_exception_handler
 
-    if request.url.path in SESSION_PATHS:
+    if is_session_path(request.url.path):
         return JSONResponse(
             status_code=422,
-            content={"detail": "Invalid authentication data"},
+            content={
+                "detail": "Invalid account data"
+                if is_account_path(request.url.path)
+                else "Invalid authentication data"
+            },
             headers={"Cache-Control": "no-store"},
         )
     if request.url.path != REGISTRATION_PATH:

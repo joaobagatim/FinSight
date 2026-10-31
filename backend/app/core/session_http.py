@@ -13,11 +13,20 @@ from app.core.config import Settings
 
 PASSWORD_CHANGE_PATH = "/api/v1/users/me/change-password"
 PROFILE_PATH = "/api/v1/users/me"
+ACCOUNTS_PATH = "/api/v1/accounts"
 SESSION_PATHS = frozenset(
     {f"/api/v1/auth/{name}" for name in ("csrf", "login", "refresh", "logout", "me")}
     | {PASSWORD_CHANGE_PATH, PROFILE_PATH}
 )
 _SINGLE_HEADERS = {b"origin", b"content-type", b"x-csrf-token", b"x-csrf-bootstrap"}
+
+
+def is_account_path(path: str) -> bool:
+    return path == ACCOUNTS_PATH or path.startswith(ACCOUNTS_PATH + "/")
+
+
+def is_session_path(path: str) -> bool:
+    return path in SESSION_PATHS or is_account_path(path)
 
 
 class SessionHttpLimits:
@@ -62,7 +71,7 @@ class SessionHttpMiddleware:
         self.limits = limits
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope["path"] not in SESSION_PATHS:
+        if scope["type"] != "http" or not is_session_path(scope["path"]):
             await self.app(scope, receive, send)
             return
 
@@ -85,7 +94,9 @@ class SessionHttpMiddleware:
         seen = set()
         for key, _ in scope["headers"]:
             key = key.lower()
-            if key in _SINGLE_HEADERS:
+            if key in _SINGLE_HEADERS or (
+                key == b"idempotency-key" and is_account_path(scope["path"])
+            ):
                 if key in seen:
                     await reject(403, "Authentication request rejected")
                     return
@@ -113,7 +124,8 @@ class SessionHttpMiddleware:
             return
         bound = (
             self.settings.auth_login_body_bytes
-            if scope["path"] in {"/api/v1/auth/login", PASSWORD_CHANGE_PATH, PROFILE_PATH}
+            if scope["path"]
+            in {"/api/v1/auth/login", PASSWORD_CHANGE_PATH, PROFILE_PATH, ACCOUNTS_PATH}
             else self.settings.auth_body_bytes
         )
         body = bytearray()
@@ -163,12 +175,21 @@ class SessionCorsMiddleware:
             allow_methods=["GET", "PATCH"],
             allow_headers=["Accept", "Content-Type", "X-CSRF-Token"],
         )
+        self.accounts = CORSMiddleware(
+            app,
+            allow_origins=[str(origin).rstrip("/") for origin in settings.auth_allowed_origins],
+            allow_credentials=True,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Accept", "Content-Type", "X-CSRF-Token", "Idempotency-Key"],
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         handler = self.session if scope.get("path") in SESSION_PATHS else self.other
         if scope.get("path") == PROFILE_PATH:
             handler = self.profile
-        if scope["type"] == "http" and scope["path"] in SESSION_PATHS:
+        if is_account_path(scope.get("path", "")):
+            handler = self.accounts
+        if scope["type"] == "http" and is_session_path(scope["path"]):
 
             async def no_store(message):
                 if message["type"] == "http.response.start":
@@ -182,7 +203,9 @@ class SessionCorsMiddleware:
             seen = set()
             for key, _ in scope["headers"]:
                 key = key.lower()
-                if key in _SINGLE_HEADERS:
+                if key in _SINGLE_HEADERS or (
+                    key == b"idempotency-key" and is_account_path(scope["path"])
+                ):
                     if key in seen:
                         await JSONResponse(
                             {"detail": "Authentication request rejected"}, status_code=403
