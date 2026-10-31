@@ -317,14 +317,17 @@ backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini check
 `0005_transactions_transfers` cria `transactions`/`transfers` e acrescenta
 a chave composta de proprietário/id/tipo em categorias;
 `0006_goals_allocations` cria `financial_goals` e `goal_allocations`;
-`0007_refresh_token_history` acrescenta a tabela técnica `refresh_token_history`.
+`0007_refresh_token_history` acrescenta a tabela técnica `refresh_token_history`;
+`0008_account_creation_requests` acrescenta `account_creation_requests` para
+persistir futuras tentativas de criação de contas por usuário/chave.
 O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
-domínio estão modeladas; autenticação HTTP está disponível, mas os recursos
-financeiros e sua autorização HTTP ainda serão implementados.
+domínio estão modeladas; autenticação HTTP e cadastro/consulta de contas próprias
+estão disponíveis. Os demais recursos financeiros ainda serão implementados.
 Repetir o upgrade mantém a mesma revisão. A aplicação
 não executa migrações automaticamente ao iniciar. `check` compara o banco com
 `Base.metadata`, com identidade, contas, categorias, importações, transações,
-transferências, metas, alocações e histórico de refresh; tabelas manuais podem ser
+transferências, metas, alocações, histórico de refresh e chaves de criação de contas;
+tabelas manuais podem ser
 identificadas como divergências.
 Revise qualquer migração gerada antes de aplicá-la.
 
@@ -345,15 +348,19 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0007_refresh_token_history` e as doze tabelas `alembic_version`, `users`,
+`0008_account_creation_requests` e as treze tabelas `alembic_version`, `users`,
 `user_sessions`, `accounts`, `categories`, `import_jobs`, `import_rows`,
 `transactions`, `transfers`, `financial_goals`, `goal_allocations` e
-`refresh_token_history`.
+`refresh_token_history` e `account_creation_requests`.
 Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
 são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
-O rollback de teste `downgrade 0006_goals_allocations` remove somente o histórico
-de hashes consumidos. Isso elimina informação necessária à futura detecção de
+O rollback de teste `downgrade 0007_refresh_token_history` remove somente as
+chaves de criação de contas, preservando contas e demais tabelas. Isso perde a
+memória de idempotência e permite duplicar uma criação repetida após o downgrade;
+não execute em ambiente com tráfego sem revisão e autorização específica.
+`downgrade 0006_goals_allocations` remove também o histórico
+de hashes consumidos. Isso elimina informação necessária à detecção de
 reutilização; em um ambiente com sessões reais, é necessário analisar e revogar
 sessões antes de remover esse histórico, com autorização específica.
 `downgrade 0005_transactions_transfers` remove também metas/alocações,
@@ -1024,3 +1031,130 @@ Durante o desenvolvimento, execute testes novos/diretamente afetados; a suíte
 completa permanece no CI. O cenário API desta entrega pode ser selecionado com
 `npm run test:auth -- --project=session-api tests/auth-api/profile.spec.ts`.
 Ele usa o PostgreSQL descartável e o teardown da configuração de autenticação.
+
+## Preparação da criação idempotente de contas
+
+A revisão `0008_account_creation_requests` persiste tentativas de criação de
+contas. A API descrita abaixo usa esse armazenamento para tratar retries.
+
+A tabela técnica `account_creation_requests` guarda `user_id`, `idempotency_key`
+(UUIDv4), `request_hash` (SHA-256 em hexadecimal minúsculo), `account_id` e
+`created_at` em UTC. A chave primária combina usuário e chave de idempotência:
+dois usuários podem usar a mesma chave sem compartilhar dados. A chave estrangeira
+composta exige que a conta pertença ao usuário informado. O banco também valida
+UUIDv4 e o formato do digest, inclusive para gravações que não passam pelo ORM.
+Há índice em usuário/conta para suportar consultas dessa relação.
+
+Não são armazenados corpos JSON, senhas, cookies ou tokens. O serviço calcula o
+digest da entrada normalizada e grava conta e chave na mesma transação.
+O tratamento de replay/conflito está na API; as restrições do banco reforçam
+unicidade e propriedade. Nenhum saldo atual é calculado nesta etapa.
+
+Após aplicar a migração no banco correto, estas consultas de leitura podem ser
+usadas no DBeaver:
+
+```sql
+SELECT current_database();
+SELECT version_num FROM public.alembic_version;
+
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'account_creation_requests'
+ORDER BY ordinal_position;
+
+SELECT conname, pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conrelid = 'public.account_creation_requests'::regclass
+ORDER BY conname;
+
+SELECT count(*) AS persisted_creation_requests
+FROM public.account_creation_requests;
+```
+
+Resultado esperado em um banco recém-migrado: revisão `0008_account_creation_requests`,
+cinco colunas não nulas, chave primária composta, duas chaves estrangeiras,
+verificações de digest/UUIDv4 e zero registros. Nenhuma conta, usuário ou chave é
+criada automaticamente. A API continua sem executar migrations no startup.
+
+`downgrade 0007_refresh_token_history` remove somente essa tabela técnica e seu
+índice, preservando contas existentes. Também apaga a memória de retries: quando
+a API de criação existir, repetir uma operação antiga após o downgrade poderá
+criar outra conta. Retenção e exclusão dessas chaves precisam de política própria;
+não há expurgo automático nesta etapa. Não aplique rollback em um banco em uso
+sem avaliação e autorização específicas.
+
+## Cadastrar, listar e consultar contas próprias
+
+A primeira entrega da Fase 2 implementa RF-010/RF-013:
+
+| Método e rota | Resultado |
+| --- | --- |
+| `POST /api/v1/accounts` | 201 com `{"id":"UUID"}` e cabeçalho `Location` |
+| `GET /api/v1/accounts` | Lista paginada somente das contas do usuário autenticado |
+| `GET /api/v1/accounts/{id}` | Dados da conta própria; conta alheia/inexistente retorna404 |
+
+Todas exigem cookies de autenticação e sessão ativa no banco. A criação exige
+também origem autorizada, `X-CSRF-Token` de sessão e `Idempotency-Key` com UUIDv4.
+Conhecer a chave de idempotência ou o UUID da conta não concede acesso.
+O proprietário vem da sessão; `id`, `user_id` e outros campos não previstos no
+corpo são recusados. Não envie tokens ou senhas no JSON.
+
+Exemplo de corpo, somente com dados fictícios:
+
+```json
+{
+  "name": "Conta de exemplo",
+  "type": "checking",
+  "currency": "BRL",
+  "opening_balance": "-10.25",
+  "opening_date": "2026-01-01"
+}
+```
+
+Nome tem1–100caracteres Unicode válidos, com espaços externos removidos. Os tipos
+são `checking`, `savings`, `cash` ou `investment`; moeda é somente `BRL` (padrão).
+Dinheiro deve ser string decimal finita, sem notação científica, com até duas
+casas e limite `9999999999999.99` em valor absoluto. Saldo inicial negativo é
+permitido. Números JSON e valores com mais casas decimais são recusados, sem
+arredondamento silencioso. A data deve ser uma data válida em `YYYY-MM-DD`.
+A abertura representa a posição ao final da data; não cria receita ou transação.
+
+Para repetir a mesma intenção de criação, preserve a chave e os dados. O serviço
+normaliza nome, data, moeda e Decimal antes de calcular SHA-256; `"0.1"` e `"0.10"`
+representam a mesma entrada, assim como zero e zero negativo. O mesmo
+usuário/chave/entrada retorna novamente201 com o mesmo id/Location, inclusive
+usando outra instância da API. Usar a mesma chave com dados diferentes retorna409,
+sem criar conta. Outra chave representa outra criação; nomes iguais não são
+deduplicados. Cada usuário possui seu próprio espaço de chaves.
+
+Usuário e sessão são relidos dentro da transação. A criação compartilha o lock de
+usuário com login/refresh/logout, evitando aceitar revogação concorrente; duas
+tentativas simultâneas com a mesma chave criam uma conta e um registro de retry.
+Conta e chave são confirmadas juntas. Falha de commit desfaz ambas. A serialização
+por usuário é uma escolha para o MVP, sem fila distribuída ou framework adicional.
+
+A listagem aceita `limit` (padrão50,1–100) e `offset` (0–2147483647). Retorna
+`items`, `limit`, `offset` e `has_more`, com ordem estável por criação/id. Inclui
+contas próprias ativas e arquivadas, com `is_active` explícito; filtros adicionais
+ainda não existem. Consulta/listagem retornam id, nome, tipo, moeda, saldo inicial
+como string com duas casas, data de abertura e atividade. Não expõem proprietário,
+hash de retry ou credenciais. Saldo atual, consolidado e histórico ainda não são
+calculados.
+
+Respostas usam `no-store`. CORS credenciado das contas aceitaGET/POST e os
+cabeçalhos necessários somente nas origens de autenticação configuradas. Corpos
+de criação têm limite16KiB; cabeçalhos duplicados de segurança/idempotência são
+recusados. As rotas compartilham o limite existente
+`FINSIGHT_AUTH_REQUESTS_PER_MINUTE` e a capacidade de clientes por processo;
+`X-Forwarded-For` não muda o cliente sem configuração de proxy confiável.
+
+Erros:401autenticação,403origem/CSRF,404conta ausente/alheia,409chave conflitante,
+422entrada/chave/paginação inválida,429limite e503indisponibilidade. As mensagens
+não repetem entradas nem dados de terceiros. Não há edição, arquivamento,
+exclusão ou interface de contas nesta entrega.
+
+É necessário aplicar a revisão0008 no banco correto antes de usar a criação;
+migrations não são executadas no startup. Os testes usam PostgreSQL descartável
+e usuários sintéticos. Para selecionar o cenário API novo:
+`npm run test:auth -- --project=session-api tests/auth-api/accounts.spec.ts`.
+A suíte completa continua no CI; localmente são executados novos/afetados.

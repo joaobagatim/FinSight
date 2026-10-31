@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.responses import PlainTextResponse
 
+from app.api.accounts import router as accounts_router
 from app.api.auth import router as auth_router
 from app.api.error_handlers import registration_validation_error
 from app.api.health import router as health_router
@@ -17,13 +18,14 @@ from app.core.config import Settings
 from app.core.csrf import CsrfConfigurationError, CsrfRejected
 from app.core.registration_limits import RegistrationLimits, RegistrationMiddleware
 from app.core.session_http import (
-    SESSION_PATHS,
     SessionCorsMiddleware,
     SessionHttpLimits,
     SessionHttpMiddleware,
+    is_session_path,
 )
 from app.core.tokens import TokenConfigurationError
 from app.db.session import Database
+from app.services.accounts import AccountConflict, AccountNotFound
 from app.services.registration import RegistrationUnavailable
 from app.services.sessions import (
     AuthenticationDenied,
@@ -90,9 +92,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def profile_conflict(_request, _error):
         return JSONResponse({"detail": "Profile update unavailable"}, status_code=409)
 
+    @application.exception_handler(AccountNotFound)
+    async def account_not_found(_request, _error):
+        return JSONResponse({"detail": "Account not found"}, status_code=404)
+
+    @application.exception_handler(AccountConflict)
+    async def account_conflict(_request, _error):
+        return JSONResponse({"detail": "Idempotency key conflict"}, status_code=409)
+
     @application.exception_handler(Exception)
     async def unexpected_error(request, _error):
-        if request.url.path in SESSION_PATHS:
+        if is_session_path(request.url.path):
             return JSONResponse(
                 {"detail": "Authentication temporarily unavailable"},
                 status_code=500,
@@ -119,4 +129,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(auth_router)
     application.include_router(session_router)
     application.include_router(users_router)
+    application.include_router(accounts_router)
     return application
