@@ -975,3 +975,52 @@ Pytest valida isolamento, rollback e corridas com conexões PostgreSQL próprias
 cenário, sem modificar alice/bob dos testes existentes. Não há UI de produto,
 novas dependências, schema ou migrations nesta alteração. Os testes continuam
 sem persistir traces, vídeo, screenshots ou estado de autenticação.
+
+## Consultar e editar o próprio perfil
+
+`GET /api/v1/users/me` retorna somente `id`, `name` e `email` do usuário
+autenticado. `GET /api/v1/auth/me` permanece disponível com o mesmo contrato.
+`PATCH /api/v1/users/me` aceita `name` e/ou `email` em JSON e retorna 204 sem corpo.
+Exige sessão ativa, origem autorizada e `X-CSRF-Token` vinculado à sessão.
+O proprietário vem da sessão; enviar `user_id` ou outra propriedade desconhecida
+é inválido. Campos nulos, corpo vazio e valores inválidos são recusados.
+
+O nome é aparado nas extremidades e tem 1–120 caracteres Unicode válidos. O e-mail
+segue a validação do cadastro, com normalização para minúsculas e limite de 255 caracteres.
+Atualizar apenas o nome preserva as sessões e não exige senha. Reenviar o mesmo
+e-mail normalizado também preserva as sessões. Ao trocar efetivamente o endereço,
+inclua `current_password` com a senha atual, preservando seus espaços.
+Ela tem a mesma política de 15–128 caracteres do cadastro e nunca é retornada.
+
+Depois da reautenticação, o serviço bloqueia e relê usuário/sessão. Na mesma
+transação, altera o e-mail e revoga todas as sessões próprias, preservando outros
+usuários e revogações anteriores. Sucesso apaga os cookies locais e exige novo
+login com o endereço novo e a senha existente. Erro de banco ou conflito desfaz
+também uma alteração de nome enviada junto, sem atualização parcial.
+
+| Status PATCH | Significado |
+| --- | --- |
+| 204 | Perfil atualizado; troca efetiva de e-mail também encerra sessões |
+| 401 | Sessão ou senha atual inválida |
+| 403 | Origem/CSRF/transporte inválido |
+| 409 | Atualização indisponível por conflito de e-mail; sem dados de terceiros |
+| 422 | Entrada inválida ou senha atual ausente na troca de e-mail |
+| 429 | Limite de requisições/hashes; observar `Retry-After` |
+| 503 | Serviço temporariamente indisponível; sem sucesso parcial |
+
+PATCH compartilha o limite de tentativas da troca de senha, cinco por minuto/IP/processo
+por padrão (`FINSIGHT_AUTH_PASSWORD_CHANGE_REQUESTS_PER_MINUTE`), além dos slots de
+Argon2 com cadastro/login. O corpo tem limite de 16 KiB. Respostas usam `no-store` e
+erros sanitizados. CORS permite GET/PATCH somente nas origens de autenticação
+configuradas para esse caminho; não habilita PATCH nas demais rotas.
+
+Ainda não existe confirmação de posse do novo e-mail ou envio de mensagens.
+Essa limitação deve ser resolvida antes de disponibilizar troca de e-mail em
+produção. Revogação não cancela requisições em andamento; se a resposta se perder
+após commit, tente login com o novo e-mail em vez de repetir automaticamente.
+Não há interface nova, dependência ou migração nesta entrega.
+
+Durante o desenvolvimento, execute testes novos/diretamente afetados; a suíte
+completa permanece no CI. O cenário API desta entrega pode ser selecionado com
+`npm run test:auth -- --project=session-api tests/auth-api/profile.spec.ts`.
+Ele usa o PostgreSQL descartável e o teardown da configuração de autenticação.

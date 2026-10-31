@@ -322,3 +322,32 @@ def test_password_change_bucket_shares_total_capacity_and_expires():
     assert limits.admit("one", login=True) == 60
     now = 61
     assert limits.admit("one", login=True) == 0
+
+
+def test_profile_patch_has_cors_body_guard_and_shared_sensitive_rate(client):
+    path = "/api/v1/users/me"
+    response = client.options(
+        path,
+        headers={
+            "Origin": ORIGIN,
+            "Access-Control-Request-Method": "PATCH",
+            "Access-Control-Request-Headers": "content-type,x-csrf-token",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-credentials"] == "true"
+    assert client.patch(path, content="plain").status_code == 415
+    assert (
+        client.patch(
+            path, content="x" * 16385, headers={"Content-Type": "application/json"}
+        ).status_code
+        == 413
+    )
+    for _ in range(3):
+        assert (
+            client.patch(path, json={"name": "Synthetic"}, headers={"Origin": ORIGIN}).status_code
+            == 401
+        )
+    response = client.patch(path, json={"name": "Synthetic"})
+    assert response.status_code == 429 and response.headers["cache-control"] == "no-store"
+    assert client.post("/api/v1/auth/login", json={}).status_code != 429
