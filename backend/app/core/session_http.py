@@ -12,9 +12,10 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app.core.config import Settings
 
 PASSWORD_CHANGE_PATH = "/api/v1/users/me/change-password"
+PROFILE_PATH = "/api/v1/users/me"
 SESSION_PATHS = frozenset(
     {f"/api/v1/auth/{name}" for name in ("csrf", "login", "refresh", "logout", "me")}
-    | {PASSWORD_CHANGE_PATH}
+    | {PASSWORD_CHANGE_PATH, PROFILE_PATH}
 )
 _SINGLE_HEADERS = {b"origin", b"content-type", b"x-csrf-token", b"x-csrf-bootstrap"}
 
@@ -92,12 +93,15 @@ class SessionHttpMiddleware:
         retry = self.limits.admit(
             (scope.get("client") or ("unknown",))[0],
             login=scope["path"] == "/api/v1/auth/login",
-            password_change=scope["path"] == PASSWORD_CHANGE_PATH,
+            password_change=scope["path"] == PASSWORD_CHANGE_PATH
+            or (scope["path"] == PROFILE_PATH and scope["method"] == "PATCH"),
         )
         if retry:
             await reject(429, "Authentication limit reached", retry)
             return
-        if scope["method"] != "POST":
+        if scope["method"] != "POST" and not (
+            scope["path"] == PROFILE_PATH and scope["method"] == "PATCH"
+        ):
             await self.app(scope, receive, no_store)
             return
         headers = dict(scope["headers"])
@@ -109,7 +113,7 @@ class SessionHttpMiddleware:
             return
         bound = (
             self.settings.auth_login_body_bytes
-            if scope["path"] in {"/api/v1/auth/login", PASSWORD_CHANGE_PATH}
+            if scope["path"] in {"/api/v1/auth/login", PASSWORD_CHANGE_PATH, PROFILE_PATH}
             else self.settings.auth_body_bytes
         )
         body = bytearray()
@@ -152,9 +156,18 @@ class SessionCorsMiddleware:
             allow_methods=["GET", "POST"],
             allow_headers=["Accept", "Content-Type"],
         )
+        self.profile = CORSMiddleware(
+            app,
+            allow_origins=[str(origin).rstrip("/") for origin in settings.auth_allowed_origins],
+            allow_credentials=True,
+            allow_methods=["GET", "PATCH"],
+            allow_headers=["Accept", "Content-Type", "X-CSRF-Token"],
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         handler = self.session if scope.get("path") in SESSION_PATHS else self.other
+        if scope.get("path") == PROFILE_PATH:
+            handler = self.profile
         if scope["type"] == "http" and scope["path"] in SESSION_PATHS:
 
             async def no_store(message):

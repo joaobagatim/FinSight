@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 from pydantic import SecretStr
 from sqlalchemy import select, union
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -24,6 +24,7 @@ from app.db.session import Database
 from app.models.refresh_token_history import RefreshTokenHistory
 from app.models.user import User
 from app.models.user_session import UserSession
+from app.schemas.users import ProfileUpdateInput
 from app.services.session_types import AuthContext, SessionGrant
 
 
@@ -44,6 +45,16 @@ class SessionBindingMismatch(AuthenticationDenied):
 class PasswordChangeRejected(Exception):
     def __init__(self):
         super().__init__("Password change rejected")
+
+
+class ProfileUpdateRejected(Exception):
+    def __init__(self):
+        super().__init__("Profile update rejected")
+
+
+class ProfileConflict(Exception):
+    def __init__(self):
+        super().__init__("Profile update unavailable")
 
 
 @lru_cache(maxsize=1)
@@ -313,6 +324,66 @@ class SessionService:
                 if item.revoked_at is None:
                     item.revoked_at = now
             session.flush()
+
+    def update_profile(self, token: str | SecretStr, data: ProfileUpdateInput) -> bool:
+        """Return whether committed email replacement requires clearing cookies."""
+        claims = self._claims(token)
+        with self._transaction() as session:
+            pair = session.execute(
+                select(User, UserSession)
+                .join(UserSession, UserSession.user_id == User.id)
+                .where(User.id == claims.user_id, UserSession.id == claims.session_id)
+            ).one_or_none()
+            now = self._now()
+            if (
+                pair is None
+                or not self._live(*pair, now)
+                or not claims.not_before <= now < claims.expires_at
+            ):
+                raise AuthenticationDenied()
+            original_email, encoded = pair[0].email, pair[0].password_hash
+            email_changed = data.email is not None and data.email != original_email
+            if email_changed:
+                if data.current_password is None:
+                    raise ProfileUpdateRejected()
+                if not verify_password(data.current_password.get_secret_value(), encoded):
+                    raise AuthenticationDenied()
+            user, row = self._lock(session, claims.user_id, claims.session_id)
+            claims = self._claims(token)
+            now = self._now()
+            if (
+                not self._live(user, row, now)
+                or user.email != original_email
+                or user.password_hash != encoded
+                or not claims.not_before <= now < claims.expires_at
+            ):
+                raise AuthenticationDenied()
+            if email_changed:
+                owned = session.scalars(
+                    select(UserSession)
+                    .where(UserSession.user_id == user.id)
+                    .order_by(UserSession.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                ).all()
+                if any(item.revoked_at is None and item.created_at > now for item in owned):
+                    raise SessionUnavailable()
+                user.email = data.email
+                for item in owned:
+                    if item.revoked_at is None:
+                        item.revoked_at = now
+            if data.name is not None:
+                user.name = data.name
+            try:
+                session.flush()
+            except IntegrityError as error:
+                if (
+                    getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+                    == "uq_users_email"
+                ):
+                    raise ProfileConflict() from None
+                raise
+        return email_changed
 
     def csrf_binding(
         self, *, refresh: SecretStr | None = None, access: SecretStr | None = None

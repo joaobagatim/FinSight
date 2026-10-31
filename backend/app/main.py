@@ -25,7 +25,13 @@ from app.core.session_http import (
 from app.core.tokens import TokenConfigurationError
 from app.db.session import Database
 from app.services.registration import RegistrationUnavailable
-from app.services.sessions import AuthenticationDenied, PasswordChangeRejected, SessionUnavailable
+from app.services.sessions import (
+    AuthenticationDenied,
+    PasswordChangeRejected,
+    ProfileConflict,
+    ProfileUpdateRejected,
+    SessionUnavailable,
+)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -75,6 +81,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.exception_handler(PasswordChangeRejected)
     async def password_change_rejected(_request, _error):
         return JSONResponse({"detail": "Password change rejected"}, status_code=422)
+
+    @application.exception_handler(ProfileUpdateRejected)
+    async def profile_update_rejected(_request, _error):
+        return JSONResponse({"detail": "Profile update rejected"}, status_code=422)
+
+    @application.exception_handler(ProfileConflict)
+    async def profile_conflict(_request, _error):
+        return JSONResponse({"detail": "Profile update unavailable"}, status_code=409)
 
     @application.exception_handler(Exception)
     async def unexpected_error(request, _error):
