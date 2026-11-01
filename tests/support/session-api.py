@@ -32,6 +32,7 @@ def run():
         jwt_signing_key=os.environ["SESSION_TEST_JWT_KEY"],
         auth_csrf_signing_key=os.environ["SESSION_TEST_CSRF_KEY"],
         auth_cookie_secure=False,
+        cors_origins=["http://127.0.0.1:4175"],
         auth_allowed_origins=["http://127.0.0.1:4175"],
         auth_login_requests_per_minute=100,
         auth_password_change_requests_per_minute=100,

@@ -1158,3 +1158,77 @@ migrations não são executadas no startup. Os testes usam PostgreSQL descartáv
 e usuários sintéticos. Para selecionar o cenário API novo:
 `npm run test:auth -- --project=session-api tests/auth-api/accounts.spec.ts`.
 A suíte completa continua no CI; localmente são executados novos/afetados.
+
+## Acessar o FinSight pelo navegador
+
+A página pública possui o botão **Acessar FinSight**. Ele consulta a sessão quando
+acionado e apresenta o formulário de login quando necessário. A home não depende
+da API de autenticação para carregar. **Criar acesso** envia nome, e-mail e senha;
+a resposta é genérica e pede que a pessoa entre, sem afirmar se o e-mail já existia.
+Senhas têm15–128caracteres, preservam espaços e são limpas dos campos após o envio.
+**Sair** confirma a revogação no servidor antes de limpar a área autenticada.
+
+O frontend lê `VITE_API_BASE_URL` do ambiente ou do `.env` na raiz do repositório.
+Essa URL é pública e não pode conter usuário/senha, query ou fragmento. Em produção
+use uma origem HTTPS; em desenvolvimento prefira `http://127.0.0.1:8000` e abra
+o Vite em `http://127.0.0.1:5173`. Os dois lados devem usar o mesmo hostname local.
+Sem URL configurada, a aplicação usa a API local na porta8000 em loopback e a
+própria origem em outros ambientes. Alterações na configuração exigem reiniciar
+o Vite; o preview precisa de um novo build.
+
+As origens do frontend precisam constar tanto em `FINSIGHT_CORS_ORIGINS`
+(cadastro sem credenciais) como em `FINSIGHT_AUTH_ALLOWED_ORIGINS` (sessões).
+As chaves de assinatura e a configuração do banco seguem as instruções anteriores.
+Não coloque segredos em variáveis `VITE_*`: elas são incorporadas ao código público.
+
+O cliente não lê access/refresh tokens, não os coloca no JSON e não salva credenciais
+em localStorage/sessionStorage. Cadastro usa fetch sem cookies; autenticação usa
+cookies e o fluxo de bootstrap CSRF. Mutações e renovação são coordenadas entre
+abas da mesma origem pela Web Locks API. Antes de renovar, a aba confere se outra
+já recuperou a sessão. Se Web Locks não estiver disponível, não há refresh
+automático: será necessário entrar novamente. Use uma única origem de frontend
+para evitar renovação concorrente entre aplicações independentes.
+
+Falha de rede/servidor é exibida como indisponibilidade, sem confundir com senha
+incorreta ou mostrar erros internos. Se a saída não puder ser confirmada, a área
+continua identificada como autenticada e oferece nova tentativa. A navegação
+desta primeira interface acontece no próprio React, sem novas dependências ou
+rotas profundas. Dados reais e credenciais não devem aparecer em evidências.
+
+Depois de entrar, a área **Suas contas** lista somente as contas do usuário
+autenticado e permite criar uma nova. Nome, tipo, saldo inicial e data de abertura
+são enviados à API real. A lista informa que o valor é uma posição inicial,
+sem apresentar saldos atuais ou dados fictícios como se fossem do usuário.
+**Carregar mais contas** usa a paginação do backend; **Atualizar lista** refaz a
+consulta. Se a API estiver indisponível, a tela mantém os dados já carregados e
+mostra uma mensagem para tentar novamente.
+
+Digite valores em formato brasileiro, por exemplo `-1.234,56`. A conversão e a
+apresentação usam strings, sem `parseFloat` ou contas monetárias com ponto flutuante.
+A API recebe `-1234.56`; a data aparece como `dd/mm/aaaa`, sem conversão de fuso.
+Cada intenção de cadastro recebe uma chave de repetição mantida em memória com
+seus dados. Duplo envio é bloqueado. Se a resposta não puder ser confirmada,
+**Tentar novamente** usa a mesma chave e entrada, sem criar outra intenção.
+Ao sair da tela ou recarregar a página, esse estado em memória é perdido: confira
+a lista antes de iniciar outro cadastro. Não há armazenamento de pedidos em disco
+ou repetição silenciosa de mutações após falha de rede.
+
+Antes de consultar/salvar contas, o cliente confere se o perfil ativo corresponde
+à pessoa exibida na tela, dentro da coordenação da sessão. Sair ou iniciar outro
+acesso avisa as abas da mesma origem por BroadcastChannel, sem incluir dados
+pessoais no aviso. As abas limpam a área autenticada; respostas antigas de visões
+encerradas não devem restaurar dados. O backend continua sendo a autoridade de
+autenticação e propriedade em cada pedido.
+
+O servidor local precisa da revisão `0008_account_creation_requests` para usar
+o cadastro de contas. A interface e os testes não aplicam essa migração ao seu
+banco pessoal. Para usar o preview na porta4173, acrescente a origem correspondente
+às duas listas de CORS. Para desenvolvimento, a porta5173 já consta no exemplo.
+Nos testes autenticados, `VITE_API_BASE_URL` aponta apenas para a API descartável
+8002 e as origens do helper permitem o frontend4175; o `.env` real não é usado.
+
+Os testes de navegador cobrem o fluxo de acesso, contas em tela estreita,
+separação entre usuários, repetição após resposta perdida, renovação em duas abas
+e limpeza após logout. Localmente são selecionados novos/afetados; o CI executa
+o conjunto completo. Não há nova dependência, edição/arquivamento de contas,
+categorias, lançamentos, dashboard ou mudança de schema nesta entrega de interface.

@@ -25,6 +25,7 @@ export default defineConfig({
     },
   ],
   webServer: {
+    env: { VITE_API_BASE_URL: 'http://127.0.0.1:8002' },
     command: 'npm run test:serve:frontend',
     url: 'http://127.0.0.1:4175',
     reuseExistingServer: false,
