@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api, errorMessage } from '@/services/api'
 
@@ -11,6 +11,14 @@ export default function AuthPanel({ onAuthenticated }) {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const registering = mode === 'register'
+  const live = useRef(false)
+
+  useEffect(() => {
+    live.current = true
+    return () => {
+      live.current = false
+    }
+  }, [])
 
   async function submit(event) {
     event.preventDefault()
@@ -30,13 +38,16 @@ export default function AuthPanel({ onAuthenticated }) {
     try {
       if (registering) {
         await api.register({ name: name.trim(), email: email.trim(), password })
+        if (!live.current) return
         setMode('login')
         setName('')
         setMessage('Solicitação recebida. Entre com seu e-mail e senha para continuar.')
       } else {
-        onAuthenticated(await api.login(email.trim(), password))
+        const profile = await api.login(email.trim(), password)
+        if (live.current) onAuthenticated(profile)
       }
     } catch (failure) {
+      if (!live.current) return
       setError(
         errorMessage(
           failure,

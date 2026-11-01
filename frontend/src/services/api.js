@@ -1,4 +1,15 @@
 // Cookies stay in the browser; only the session-bound CSRF value is used by JavaScript.
+const sessionEvents =
+  typeof BroadcastChannel === 'function' ? new BroadcastChannel('finsight-session-events') : null
+if (import.meta.hot) import.meta.hot.dispose(() => sessionEvents?.close())
+
+export function watchSessionChanges(callback) {
+  const receive = (event) => {
+    if (event.data === 'session-changed') callback()
+  }
+  sessionEvents?.addEventListener('message', receive)
+  return () => sessionEvents?.removeEventListener('message', receive)
+}
 export class ApiError extends Error {
   constructor(status) {
     super('Não foi possível concluir a solicitação.')
@@ -102,6 +113,33 @@ async function authenticatedRead(path) {
 }
 
 export const api = {
+  accounts: (ownerId, offset = 0) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/accounts?limit=50&offset=${offset}`)
+      if (!Array.isArray(result?.items)) throw new ApiError(0)
+      return result
+    }),
+  createAccount: (ownerId, data, key) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () =>
+        send('/accounts', {
+          method: 'POST',
+          data,
+          headers: { 'X-CSRF-Token': await bootstrap(), 'Idempotency-Key': key },
+        })
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return submit() // Keep the same key and payload after an authenticated retry.
+      }
+    }),
   profile: () => authenticatedRead('/users/me'),
   register: (data) => send('/auth/register', { method: 'POST', data, credentials: 'omit' }),
   login: (email, password) =>
@@ -109,6 +147,7 @@ export const api = {
       // Explicit sign-in replaces any stale recognized session before starting a new one.
       let csrf = await bootstrap()
       await send('/auth/logout', { method: 'POST', data: {}, headers: { 'X-CSRF-Token': csrf } })
+      sessionEvents?.postMessage('session-changed')
       csrf = await bootstrap()
       await send('/auth/login', {
         method: 'POST',
@@ -121,6 +160,7 @@ export const api = {
     coordinated(async () => {
       const csrf = await bootstrap()
       await send('/auth/logout', { method: 'POST', data: {}, headers: { 'X-CSRF-Token': csrf } })
+      sessionEvents?.postMessage('session-changed')
     }),
 }
 

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import BrandMark from './components/BrandMark.jsx'
 import AuthPanel from './components/AuthPanel.jsx'
-import { api, errorMessage } from '@/services/api'
+import AccountsPanel from './components/AccountsPanel.jsx'
+import { api, errorMessage, watchSessionChanges } from '@/services/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
@@ -29,24 +30,51 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const main = useRef(null)
+  const authVersion = useRef(0)
 
   useEffect(() => {
     if (view !== 'home') main.current?.focus()
   }, [view])
 
+  useEffect(
+    () =>
+      watchSessionChanges(() => {
+        authVersion.current += 1
+        setUser(null)
+        setBusy(false)
+        setView('home')
+        setNotice('Seu acesso mudou em outra aba. Acesse novamente para continuar.')
+      }),
+    [],
+  )
+
   const authenticated = useCallback((profile) => {
+    authVersion.current += 1
     setUser(profile)
     setView('accounts')
     setNotice('')
   }, [])
 
+  const expired = useCallback(() => {
+    authVersion.current += 1
+    setUser(null)
+    setView('access')
+    setNotice('Sua sessão terminou. Entre novamente para continuar.')
+  }, [])
+
   async function enter() {
     if (busy) return
+    const version = ++authVersion.current
     setBusy(true)
     setNotice('')
     try {
-      authenticated(await api.profile())
+      const profile = await api.profile()
+      if (version === authVersion.current) {
+        setBusy(false)
+        authenticated(profile)
+      }
     } catch (error) {
+      if (version !== authVersion.current) return
       if (error.status === 401) {
         setUser(null)
         setView('access')
@@ -54,7 +82,7 @@ export default function App() {
         setNotice(errorMessage(error, 'Não foi possível acessar sua conta. Tente novamente.'))
       }
     } finally {
-      setBusy(false)
+      if (version === authVersion.current) setBusy(false)
     }
   }
 
@@ -74,6 +102,12 @@ export default function App() {
     }
   }
 
+  function home() {
+    authVersion.current += 1
+    setBusy(false)
+    setView('home')
+  }
+
   return (
     <div className="app-shell min-h-screen">
       <a className="skip-link" href="#conteudo">
@@ -81,12 +115,7 @@ export default function App() {
       </a>
 
       <header className="site-header">
-        <a
-          className="brand"
-          href="#conteudo"
-          aria-label="FinSight — início"
-          onClick={() => setView('home')}
-        >
+        <a className="brand" href="#conteudo" aria-label="FinSight — início" onClick={home}>
           <BrandMark />
           <span>
             FinSight<span className="brand-dot">.</span>
@@ -124,7 +153,10 @@ export default function App() {
           <section className="workspace">
             <p className="eyebrow">Seu espaço</p>
             <h1>Olá, {user.name}.</h1>
-            <p>Seu acesso está pronto.</p>
+            <p className="muted workspace-description">
+              Vamos organizar suas contas, um passo de cada vez.
+            </p>
+            <AccountsPanel key={user.id} ownerId={user.id} onExpired={expired} />
           </section>
         )}
         {view === 'home' && (

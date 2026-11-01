@@ -420,6 +420,113 @@ fieldset {
   letter-spacing: -1.5px;
   overflow-wrap: anywhere;
 }
+.workspace-description {
+  margin-top: 16px;
+}
+.accounts-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 36px;
+  align-items: start;
+  margin-top: 44px;
+}
+.accounts-list,
+.account-form {
+  min-width: 0;
+}
+.section-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: start;
+  justify-content: space-between;
+}
+.section-bar h2,
+.account-form h2 {
+  font-size: 24px;
+}
+.section-bar .muted,
+.account-form > .muted {
+  font-size: 14px;
+  margin-top: 10px;
+}
+.account-form .eyebrow {
+  font-size: 10px;
+  margin-bottom: 12px;
+}
+.account-cards {
+  display: grid;
+  gap: 16px;
+  margin: 24px 0;
+  padding: 0;
+  list-style: none;
+}
+.account-card {
+  padding: 24px;
+}
+.account-card h3 {
+  font-size: 18px;
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+.account-type {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.account-card dl {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 28px 0 0;
+}
+.account-card dt {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  margin-bottom: 8px;
+}
+.account-card dd {
+  margin: 0;
+  font-size: clamp(17px, 2.2vw, 24px);
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  overflow-wrap: anywhere;
+}
+.account-card .opening-date dd {
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.negative-money {
+  color: #9b3528;
+}
+.empty-accounts {
+  padding: 44px 24px;
+  margin: 24px 0;
+  border: 1px dashed #c1cfb8;
+  border-radius: 16px;
+  background: #f1f5e9;
+}
+.empty-symbol {
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  background: #e0ebd7;
+  color: var(--color-green);
+  border-radius: 50%;
+  font-size: 24px;
+}
+.empty-accounts h3 {
+  margin-top: 20px;
+}
+.empty-accounts p,
+.retry-account p {
+  color: var(--muted-foreground);
+  font-size: 14px;
+  line-height: 1.7;
+}
 
 @media (max-width: 640px) {
   .app-shell {
@@ -498,5 +605,13 @@ fieldset {
   }
   .workspace {
     padding: 32px 0 48px;
+  }
+  .accounts-layout {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    margin-top: 32px;
+  }
+  .account-card {
+    padding: 20px;
   }
 }

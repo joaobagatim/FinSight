@@ -1194,3 +1194,41 @@ incorreta ou mostrar erros internos. Se a saída não puder ser confirmada, a á
 continua identificada como autenticada e oferece nova tentativa. A navegação
 desta primeira interface acontece no próprio React, sem novas dependências ou
 rotas profundas. Dados reais e credenciais não devem aparecer em evidências.
+
+Depois de entrar, a área **Suas contas** lista somente as contas do usuário
+autenticado e permite criar uma nova. Nome, tipo, saldo inicial e data de abertura
+são enviados à API real. A lista informa que o valor é uma posição inicial,
+sem apresentar saldos atuais ou dados fictícios como se fossem do usuário.
+**Carregar mais contas** usa a paginação do backend; **Atualizar lista** refaz a
+consulta. Se a API estiver indisponível, a tela mantém os dados já carregados e
+mostra uma mensagem para tentar novamente.
+
+Digite valores em formato brasileiro, por exemplo `-1.234,56`. A conversão e a
+apresentação usam strings, sem `parseFloat` ou contas monetárias com ponto flutuante.
+A API recebe `-1234.56`; a data aparece como `dd/mm/aaaa`, sem conversão de fuso.
+Cada intenção de cadastro recebe uma chave de repetição mantida em memória com
+seus dados. Duplo envio é bloqueado. Se a resposta não puder ser confirmada,
+**Tentar novamente** usa a mesma chave e entrada, sem criar outra intenção.
+Ao sair da tela ou recarregar a página, esse estado em memória é perdido: confira
+a lista antes de iniciar outro cadastro. Não há armazenamento de pedidos em disco
+ou repetição silenciosa de mutações após falha de rede.
+
+Antes de consultar/salvar contas, o cliente confere se o perfil ativo corresponde
+à pessoa exibida na tela, dentro da coordenação da sessão. Sair ou iniciar outro
+acesso avisa as abas da mesma origem por BroadcastChannel, sem incluir dados
+pessoais no aviso. As abas limpam a área autenticada; respostas antigas de visões
+encerradas não devem restaurar dados. O backend continua sendo a autoridade de
+autenticação e propriedade em cada pedido.
+
+O servidor local precisa da revisão `0008_account_creation_requests` para usar
+o cadastro de contas. A interface e os testes não aplicam essa migração ao seu
+banco pessoal. Para usar o preview na porta4173, acrescente a origem correspondente
+às duas listas de CORS. Para desenvolvimento, a porta5173 já consta no exemplo.
+Nos testes autenticados, `VITE_API_BASE_URL` aponta apenas para a API descartável
+8002 e as origens do helper permitem o frontend4175; o `.env` real não é usado.
+
+Os testes de navegador cobrem o fluxo de acesso, contas em tela estreita,
+separação entre usuários, repetição após resposta perdida, renovação em duas abas
+e limpeza após logout. Localmente são selecionados novos/afetados; o CI executa
+o conjunto completo. Não há nova dependência, edição/arquivamento de contas,
+categorias, lançamentos, dashboard ou mudança de schema nesta entrega de interface.
