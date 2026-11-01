@@ -1158,3 +1158,39 @@ migrations não são executadas no startup. Os testes usam PostgreSQL descartáv
 e usuários sintéticos. Para selecionar o cenário API novo:
 `npm run test:auth -- --project=session-api tests/auth-api/accounts.spec.ts`.
 A suíte completa continua no CI; localmente são executados novos/afetados.
+
+## Acessar o FinSight pelo navegador
+
+A página pública possui o botão **Acessar FinSight**. Ele consulta a sessão quando
+acionado e apresenta o formulário de login quando necessário. A home não depende
+da API de autenticação para carregar. **Criar acesso** envia nome, e-mail e senha;
+a resposta é genérica e pede que a pessoa entre, sem afirmar se o e-mail já existia.
+Senhas têm15–128caracteres, preservam espaços e são limpas dos campos após o envio.
+**Sair** confirma a revogação no servidor antes de limpar a área autenticada.
+
+O frontend lê `VITE_API_BASE_URL` do ambiente ou do `.env` na raiz do repositório.
+Essa URL é pública e não pode conter usuário/senha, query ou fragmento. Em produção
+use uma origem HTTPS; em desenvolvimento prefira `http://127.0.0.1:8000` e abra
+o Vite em `http://127.0.0.1:5173`. Os dois lados devem usar o mesmo hostname local.
+Sem URL configurada, a aplicação usa a API local na porta8000 em loopback e a
+própria origem em outros ambientes. Alterações na configuração exigem reiniciar
+o Vite; o preview precisa de um novo build.
+
+As origens do frontend precisam constar tanto em `FINSIGHT_CORS_ORIGINS`
+(cadastro sem credenciais) como em `FINSIGHT_AUTH_ALLOWED_ORIGINS` (sessões).
+As chaves de assinatura e a configuração do banco seguem as instruções anteriores.
+Não coloque segredos em variáveis `VITE_*`: elas são incorporadas ao código público.
+
+O cliente não lê access/refresh tokens, não os coloca no JSON e não salva credenciais
+em localStorage/sessionStorage. Cadastro usa fetch sem cookies; autenticação usa
+cookies e o fluxo de bootstrap CSRF. Mutações e renovação são coordenadas entre
+abas da mesma origem pela Web Locks API. Antes de renovar, a aba confere se outra
+já recuperou a sessão. Se Web Locks não estiver disponível, não há refresh
+automático: será necessário entrar novamente. Use uma única origem de frontend
+para evitar renovação concorrente entre aplicações independentes.
+
+Falha de rede/servidor é exibida como indisponibilidade, sem confundir com senha
+incorreta ou mostrar erros internos. Se a saída não puder ser confirmada, a área
+continua identificada como autenticada e oferece nova tentativa. A navegação
+desta primeira interface acontece no próprio React, sem novas dependências ou
+rotas profundas. Dados reais e credenciais não devem aparecer em evidências.
