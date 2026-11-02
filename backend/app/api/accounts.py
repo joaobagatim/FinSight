@@ -3,12 +3,13 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import SecretStr
 
 from app.api.dependencies import get_current_user, get_session_service
+from app.api.financial_auth import creation_key
+from app.api.financial_auth import financial_access as account_access
 from app.api.session_auth import SessionRequest, security
-from app.core.auth_cookies import AuthCookies
 from app.core.csrf import CsrfRejected
 from app.schemas.accounts import (
     AccountCreatedResponse,
@@ -26,24 +27,6 @@ router = APIRouter(prefix="/api/v1/accounts", tags=["accounts"])
 
 def account_service(service: Annotated[SessionService, Depends(get_session_service)]):
     return AccountService(service)
-
-
-def account_access(
-    request: Request, _user: Annotated[AuthContext, Depends(get_current_user)]
-) -> SecretStr:
-    return AuthCookies(request.app.state.settings, request).read()["access"]
-
-
-def creation_key(
-    value: Annotated[str, Header(alias="Idempotency-Key", min_length=36, max_length=36)],
-) -> UUID:
-    try:
-        key = UUID(value)
-    except ValueError:
-        raise HTTPException(422, "Invalid idempotency key") from None
-    if key.version != 4 or str(key) != value.lower():
-        raise HTTPException(422, "Invalid idempotency key")
-    return key
 
 
 @router.post("", status_code=201, response_model=AccountCreatedResponse)

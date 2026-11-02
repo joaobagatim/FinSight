@@ -319,14 +319,18 @@ a chave composta de proprietário/id/tipo em categorias;
 `0006_goals_allocations` cria `financial_goals` e `goal_allocations`;
 `0007_refresh_token_history` acrescenta a tabela técnica `refresh_token_history`;
 `0008_account_creation_requests` acrescenta `account_creation_requests` para
-persistir futuras tentativas de criação de contas por usuário/chave.
+persistir tentativas de criação de contas por usuário/chave;
+`0009_transaction_requests` acrescenta `transaction_creation_requests` e uma
+chave composta proprietário/id em `transactions` para proteger a repetição de
+lançamentos manuais. Nenhum dado financeiro é criado pela migration.
 O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
 domínio estão modeladas; autenticação HTTP e cadastro/consulta de contas próprias
 estão disponíveis. Os demais recursos financeiros ainda serão implementados.
 Repetir o upgrade mantém a mesma revisão. A aplicação
 não executa migrações automaticamente ao iniciar. `check` compara o banco com
 `Base.metadata`, com identidade, contas, categorias, importações, transações,
-transferências, metas, alocações, histórico de refresh e chaves de criação de contas;
+transferências, metas, alocações, histórico de refresh e chaves de criação de contas
+e lançamentos;
 tabelas manuais podem ser
 identificadas como divergências.
 Revise qualquer migração gerada antes de aplicá-la.
@@ -348,15 +352,17 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0008_account_creation_requests` e as treze tabelas `alembic_version`, `users`,
+`0009_transaction_requests` e as quatorze tabelas `alembic_version`, `users`,
 `user_sessions`, `accounts`, `categories`, `import_jobs`, `import_rows`,
 `transactions`, `transfers`, `financial_goals`, `goal_allocations` e
-`refresh_token_history` e `account_creation_requests`.
+`refresh_token_history`, `account_creation_requests` e `transaction_creation_requests`.
 Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
 são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
-O rollback de teste `downgrade 0007_refresh_token_history` remove somente as
-chaves de criação de contas, preservando contas e demais tabelas. Isso perde a
+O rollback de teste `downgrade 0008_account_creation_requests` remove as chaves
+de criação de lançamentos e a nova chave composta, preservando os lançamentos.
+`downgrade 0007_refresh_token_history` remove também as chaves de criação de
+contas, preservando contas e demais tabelas. Isso perde a
 memória de idempotência e permite duplicar uma criação repetida após o downgrade;
 não execute em ambiente com tráfego sem revisão e autorização específica.
 `downgrade 0006_goals_allocations` remove também o histórico
@@ -1071,17 +1077,89 @@ SELECT count(*) AS persisted_creation_requests
 FROM public.account_creation_requests;
 ```
 
-Resultado esperado em um banco recém-migrado: revisão `0008_account_creation_requests`,
+Resultado esperado em um banco recém-migrado: revisão `0009_transaction_requests`,
 cinco colunas não nulas, chave primária composta, duas chaves estrangeiras,
 verificações de digest/UUIDv4 e zero registros. Nenhuma conta, usuário ou chave é
 criada automaticamente. A API continua sem executar migrations no startup.
 
-`downgrade 0007_refresh_token_history` remove somente essa tabela técnica e seu
-índice, preservando contas existentes. Também apaga a memória de retries: quando
+Partindo da revisão0008, `downgrade 0007_refresh_token_history` remove essa tabela
+técnica e seu índice, preservando contas existentes. Partindo da revisão0009,
+remove também a tabela técnica de tentativas de lançamentos. Apaga a memória de retries: quando
 a API de criação existir, repetir uma operação antiga após o downgrade poderá
 criar outra conta. Retenção e exclusão dessas chaves precisam de política própria;
 não há expurgo automático nesta etapa. Não aplique rollback em um banco em uso
 sem avaliação e autorização específicas.
+
+## Lançamentos manuais e saldo real pela API
+
+Esta entrega disponibiliza a API; o formulário de receitas/despesas ainda não foi
+implementado. Não altera a interface existente de contas/categorias.
+
+`POST /api/v1/transactions` exige sessão, origem autorizada, CSRF e
+`Idempotency-Key` UUIDv4. Envie os UUIDs de uma conta e categoria próprias e ativas:
+
+```json
+{
+  "account_id": "11111111-1111-4111-8111-111111111111",
+  "category_id": "22222222-2222-4222-8222-222222222222",
+  "description": "Exemplo fictício de despesa",
+  "amount": "150.00",
+  "type": "expense",
+  "status": "posted",
+  "effective_date": "2026-01-02"
+}
+```
+
+Substitua os IDs fictícios pelos retornados em suas consultas autenticadas. `type`
+é `income` ou `expense` e deve corresponder ao tipo da categoria; `status` é
+explicitamente `planned` ou `posted`. O valor é uma string decimal positiva com
+até13 dígitos inteiros e duas casas, nunca um número JSON ou valor negativo.
+Descrição não vazia tem até255 caracteres; `notes` é opcional, não vazio quando
+for informado e limitado a2000 caracteres. Datas são civis ISO `YYYY-MM-DD`.
+Tanto planejados quanto efetivados exigem data posterior à abertura da conta,
+que representa a posição ao final daquele dia. Não envie `user_id` ou vínculos de
+importação: o proprietário vem da sessão e este fluxo é exclusivamente manual.
+
+POST retorna201 com `{"id":"UUID"}` e Location. Repita uma tentativa ambígua
+com a mesma chave e os mesmos dados; ela retorna o mesmo ID sem outro lançamento.
+Valores equivalentes como `150.0` e `150.00` usam a mesma representação canônica.
+A mesma chave com outros dados retorna409. O registro de repetição e o movimento
+são gravados atomicamente; a chave é separada por usuário. Uma repetição válida
+continua retornando o ID original se a conta/categoria depois for desativada.
+Uma nova criação nessas entidades desativadas é rejeitada.
+
+`GET /api/v1/transactions/{id}` consulta somente um lançamento próprio.
+`GET /api/v1/transactions` lista com `limit` padrão50/máximo100, `offset` e
+`has_more`, em ordem decrescente de data, criação e UUID. Filtros opcionais:
+`account_id`, `category_id`, `type`, `status`, `date_from` e `date_to` inclusivos.
+Intervalo invertido é inválido. Não há edição, exclusão ou efetivação de um
+planejado nesta etapa; essas operações serão implementadas separadamente.
+
+`GET /api/v1/accounts/{id}/balance?as_of=2026-01-04` exige a data de consulta
+explicitamente, sem assumir o fuso do servidor. Retorna `account_id`, `as_of`,
+`currency`, `opening_date`, `opening_balance` e `balance` como strings decimais.
+O saldo parte da abertura e soma receitas, subtrai despesas e inclui transferências
+líquidas persistidas, somente `posted` com abertura < data <= `as_of`.
+Uma única consulta SQL evita multiplicação de linhas e calcula com NUMERIC;
+nenhuma coluna de saldo é atualizada. Planejados e efetivados posteriores à data
+consultada ficam de fora. Uma consulta anterior à abertura é rejeitada.
+Contas/categorias arquivadas continuam compondo seu histórico.
+
+Exemplo: abertura de1000,00 menos uma despesa efetivada de150,00 resulta em850,00.
+Planejar outra despesa de200,00 mantém o saldo real em850,00. Projeções de saldo,
+saldo consolidado, reservas e a API de criação de transferências ficam para depois.
+O cálculo já considera transferências persistidas pelo modelo, sem criá-las.
+
+Referências inválidas/incompatíveis/inativas ou datas proibidas retornam422
+estático; consultas a recursos alheios e inexistentes retornam o mesmo404.
+Respostas protegidas usam `no-store`, limites de corpo, CORS e CSRF existentes.
+Validações não ecoam dados financeiros. A migration `0009_transaction_requests`
+é necessária para criar lançamentos com repetição segura: guarda apenas o digest
+da intenção na tabela técnica, além do movimento financeiro na tabela de domínio.
+Os testes usam bancos descartáveis; a aplicação não aplica essa migration no seu
+banco pessoal. Remover a tabela técnica por downgrade perde a memória de repetição,
+embora preserve os lançamentos, e pode permitir duplicação após novas tentativas;
+não faça esse rollback num banco em uso sem um plano específico.
 
 ## Categorias próprias pela API
 

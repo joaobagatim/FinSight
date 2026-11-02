@@ -133,7 +133,10 @@ def test_upgrade_downgrade_preserves_account_and_clears_only_request_memory(conn
         MigrationContext.configure(connection).get_current_revision()
         == "0007_refresh_token_history"
     )
-    assert set(inspect(connection).get_table_names()) == tables - {"account_creation_requests"}
+    assert set(inspect(connection).get_table_names()) == tables - {
+        "account_creation_requests",
+        "transaction_creation_requests",
+    }
     assert (
         connection.execute(select(Account.__table__).where(Account.id == account)).one() == before
     )

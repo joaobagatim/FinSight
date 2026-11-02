@@ -13,6 +13,8 @@ from app.api.categories import router as categories_router
 from app.api.error_handlers import registration_validation_error
 from app.api.health import router as health_router
 from app.api.session_auth import router as session_router
+from app.api.transactions import balance_router
+from app.api.transactions import router as transactions_router
 from app.api.users import router as users_router
 from app.core.auth_cookies import CookiePolicyRejected
 from app.core.config import Settings
@@ -36,6 +38,7 @@ from app.services.sessions import (
     ProfileUpdateRejected,
     SessionUnavailable,
 )
+from app.services.transactions import TransactionConflict, TransactionNotFound, TransactionRejected
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -120,6 +123,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def category_stale(_request, _error):
         return JSONResponse({"detail": "Category changed; reload before updating"}, status_code=412)
 
+    @application.exception_handler(TransactionNotFound)
+    async def transaction_not_found(_request, _error):
+        return JSONResponse({"detail": "Transaction not found"}, status_code=404)
+
+    @application.exception_handler(TransactionRejected)
+    async def transaction_rejected(_request, _error):
+        return JSONResponse({"detail": "Invalid transaction references or date"}, status_code=422)
+
+    @application.exception_handler(TransactionConflict)
+    async def transaction_conflict(_request, _error):
+        return JSONResponse({"detail": "Idempotency key conflict"}, status_code=409)
+
     @application.exception_handler(Exception)
     async def unexpected_error(request, _error):
         if is_session_path(request.url.path):
@@ -151,4 +166,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(users_router)
     application.include_router(accounts_router)
     application.include_router(categories_router)
+    application.include_router(transactions_router)
+    application.include_router(balance_router)
     return application
