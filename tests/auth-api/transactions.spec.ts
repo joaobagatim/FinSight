@@ -56,6 +56,9 @@ test('manual movements have exact balances, safe retries and owner isolation ove
     const replay = await request.post('/api/v1/transactions', { headers, data })
     expect(replay.status()).toBe(201)
     expect(await replay.json()).toEqual(await movement.json())
+    const detail = await request.get(movement.headers().location)
+    expect((await detail.json()).account_name).toBe('Synthetic HTTP account')
+    expect((await detail.json()).category_name).toBe('Synthetic HTTP expense')
     const balanceUrl = `/api/v1/accounts/${accountId}/balance?as_of=2026-01-04`
     expect((await (await request.get(balanceUrl)).json()).balance).toBe('850.00')
     expect(

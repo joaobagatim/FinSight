@@ -5,7 +5,15 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import UUID4, BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import (
+    UUID4,
+    AliasPath,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+)
 
 from app.schemas.accounts import AccountInput
 from app.schemas.auth import RegistrationInput
@@ -66,6 +74,8 @@ class TransactionResponse(BaseModel):
     id: UUID
     account_id: UUID
     category_id: UUID
+    account_name: str = Field(validation_alias=AliasPath("account", "name"))
+    category_name: str = Field(validation_alias=AliasPath("category", "name"))
     description: str
     amount: Decimal
     type: Literal["income", "expense"]

@@ -190,6 +190,8 @@ def test_posted_expense_changes_exact_balance_but_planned_does_not(context, reso
         assert balance(client, resource, "2026-01-01").json()["balance"] == "1000.00"
         assert balance(client, resource, "2025-12-31").status_code == 422
         detail = client.get(response.headers["location"])
+        assert detail.json()["account_name"] == "Synthetic account"
+        assert detail.json()["category_name"] == "Expense"
         assert detail.json()["amount"] == "150.00" and "user_id" not in detail.json()
         assert detail.headers["cache-control"] == "no-store"
         page = client.get(PATH, params={"limit": 1}).json()
