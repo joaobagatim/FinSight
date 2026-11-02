@@ -144,6 +144,10 @@ export default function DeleteTransactionPanel({
               O lançamento sairá do histórico e deixará de compor o saldo. Esta ação não pode ser
               desfeita pela interface.
             </p>
+            <p className="field-hint">
+              Os dados deste lançamento permanecem retidos internamente para impedir duplicidades em
+              tentativas antigas de cadastro. A exclusão não apaga esses dados definitivamente.
+            </p>
             <Button
               type="button"
               className="wide-button"
