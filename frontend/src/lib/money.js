@@ -7,7 +7,7 @@ export function parseMoney(value) {
   const negative = text.startsWith('-')
   const [whole, fraction = ''] = text.replace(/^-/, '').replaceAll('.', '').split(',')
   const integer = whole.replace(/^0+(?=[0-9])/, '')
-  if (integer.length > 13) throw new Error('O saldo inicial ultrapassa o limite permitido.')
+  if (integer.length > 13) throw new Error('O valor ultrapassa o limite permitido.')
   const cents = fraction.padEnd(2, '0')
   const sign = negative && !/^0+$/.test(integer + cents) ? '-' : ''
   return `${sign}${integer}.${cents}`

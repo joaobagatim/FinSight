@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import SecretStr
 from sqlalchemy import case, func, or_, select
+from sqlalchemy.orm import joinedload
 
 from app.models import Account, Category, Transaction, TransactionCreationRequest, Transfer
 from app.schemas.transactions import (
@@ -96,7 +97,11 @@ class TransactionService:
         if date_from is not None and date_to is not None and date_from > date_to:
             raise TransactionRejected()
         with self.sessions.authorized_transaction(token) as (session, owner):
-            query = select(Transaction).where(Transaction.user_id == owner.user_id)
+            query = (
+                select(Transaction)
+                .options(joinedload(Transaction.account), joinedload(Transaction.category))
+                .where(Transaction.user_id == owner.user_id)
+            )
             for field, value in (
                 (Transaction.account_id, account_id),
                 (Transaction.category_id, category_id),
@@ -129,9 +134,9 @@ class TransactionService:
     def get(self, token: SecretStr, transaction_id: UUID):
         with self.sessions.authorized_transaction(token) as (session, owner):
             row = session.scalar(
-                select(Transaction).where(
-                    Transaction.id == transaction_id, Transaction.user_id == owner.user_id
-                )
+                select(Transaction)
+                .options(joinedload(Transaction.account), joinedload(Transaction.category))
+                .where(Transaction.id == transaction_id, Transaction.user_id == owner.user_id)
             )
             if row is None:
                 raise TransactionNotFound()

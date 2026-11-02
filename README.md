@@ -1092,8 +1092,8 @@ sem avaliação e autorização específicas.
 
 ## Lançamentos manuais e saldo real pela API
 
-Esta entrega disponibiliza a API; o formulário de receitas/despesas ainda não foi
-implementado. Não altera a interface existente de contas/categorias.
+A API de lançamentos é utilizada pela área **Lançamentos** na interface autenticada.
+Contas e categorias continuam acessíveis pela navegação da mesma área.
 
 `POST /api/v1/transactions` exige sessão, origem autorizada, CSRF e
 `Idempotency-Key` UUIDv4. Envie os UUIDs de uma conta e categoria próprias e ativas:
@@ -1134,6 +1134,9 @@ Uma nova criação nessas entidades desativadas é rejeitada.
 `account_id`, `category_id`, `type`, `status`, `date_from` e `date_to` inclusivos.
 Intervalo invertido é inválido. Não há edição, exclusão ou efetivação de um
 planejado nesta etapa; essas operações serão implementadas separadamente.
+As consultas individual e de lista também retornam `account_name` e
+`category_name`, com os nomes atuais das entidades vinculadas. O servidor carrega
+esses vínculos junto dos lançamentos, sem uma consulta adicional por item.
 
 `GET /api/v1/accounts/{id}/balance?as_of=2026-01-04` exige a data de consulta
 explicitamente, sem assumir o fuso do servidor. Retorna `account_id`, `as_of`,
@@ -1160,6 +1163,52 @@ Os testes usam bancos descartáveis; a aplicação não aplica essa migration no
 banco pessoal. Remover a tabela técnica por downgrade perde a memória de repetição,
 embora preserve os lançamentos, e pode permitir duplicação após novas tentativas;
 não faça esse rollback num banco em uso sem um plano específico.
+
+### Usar a tela de lançamentos
+
+Depois de entrar, abra **Lançamentos**. Cadastre antes pelo menos uma conta ativa
+e uma categoria do tipo desejado em **Contas** e **Categorias**. O formulário
+oferece apenas contas ativas e categorias ativas compatíveis; se a opção desejada
+não estiver na primeira página, use os botões para carregar mais contas/categorias.
+Também é possível atualizar essas listas após cadastrar referências em outra área.
+
+Informe um valor positivo no formato brasileiro, como `150,25`, escolha receita
+ou despesa e selecione explicitamente **Efetivado** ou **Planejado**. A data deve
+ser posterior à abertura da conta. Descrição é obrigatória; observações são
+opcionais e podem ser abertas no histórico. Dinheiro é convertido e apresentado
+como strings, sem cálculos financeiros com `parseFloat`.
+
+O histórico paginado exibe descrição, conta, categoria, tipo, situação, data e
+valor. **Atualizar lançamentos** refaz a consulta; **Carregar mais lançamentos**
+continua a paginação. Dados de outra pessoa nunca são solicitados como seleção
+de proprietário; o servidor continua responsável pela autorização de cada recurso.
+
+Em **Saldo real da conta**, escolha uma conta e uma data e clique em
+**Consultar saldo**. Contas arquivadas também podem ser consultadas para histórico.
+A tela identifica a conta e a data do resultado; planejados ficam de fora. Alterar
+conta/data ou cadastrar um movimento retira o resultado anterior, evitando mostrar
+saldo desatualizado. Abertura não é confundida com o saldo atual e não há projeção
+ou saldo consolidado nessa tela.
+
+Uma tentativa de cadastro guarda chave, dados e incerteza apenas em memória.
+Duplo envio é bloqueado. Se a resposta se perder, o formulário fica bloqueado e
+**Conferir e repetir tentativa** usa a mesma chave e corpo. Navegar internamente
+entre Contas, Categorias e Lançamentos preserva a intenção, inclusive se a navegação
+acontecer durante o pedido. Uma rejeição posterior a uma tentativa incerta não
+libera os dados automaticamente para outro cadastro.
+
+Após uma rejeição definitiva sem tentativa anterior incerta, é possível revisar
+os dados. Quando houver incerteza ou conflito, confira o histórico antes de usar
+a ação explícita de encerrar a tentativa; encerrá-la não cancela um registro que
+o servidor já tenha salvo. Recarregar a página, sair, expirar a sessão ou trocar
+de acesso limpa a intenção em memória: consulte o histórico antes de começar outra.
+Nada desse estado é gravado em localStorage/sessionStorage; cookies e CSRF seguem
+o controle de sessão existente.
+
+O banco de destino precisa estar na revisão `0009_transaction_requests` para criar
+lançamentos com segurança. A interface e o startup não aplicam a migration ao banco
+pessoal. Esta entrega não acrescenta schema, dependência, edição/exclusão de
+lançamentos, efetivação de planejados ou criação de transferências.
 
 ## Categorias próprias pela API
 

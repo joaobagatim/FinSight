@@ -120,6 +120,46 @@ async function authenticatedRead(path) {
 }
 
 export const api = {
+  transactions: (ownerId, offset = 0) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/transactions?limit=50&offset=${offset}`)
+      if (!Array.isArray(result?.items)) throw new ApiError(0)
+      return result
+    }),
+  balance: (ownerId, id, asOf) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      return send(`/accounts/${encodeURIComponent(id)}/balance?as_of=${encodeURIComponent(asOf)}`)
+    }),
+  createTransaction: (ownerId, data, key) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send('/transactions', {
+          method: 'POST',
+          data,
+          headers: { 'X-CSRF-Token': await bootstrap(), 'Idempotency-Key': key },
+        })
+        if (
+          typeof result?.id !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result.id)
+        )
+          throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
   categories: (ownerId, offset = 0) =>
     coordinated(async () => {
       const profile = await renewUnlocked()
