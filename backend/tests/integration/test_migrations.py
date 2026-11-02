@@ -29,7 +29,7 @@ def test_upgrade_is_repeatable_downgrade_preserves_data_and_check_detects_drift(
             command.upgrade(config, "head")
             assert (
                 MigrationContext.configure(connection).get_current_revision()
-                == "0008_account_creation_requests"
+                == "0009_transaction_requests"
             )
             assert set(inspect(connection).get_table_names()) == {
                 "alembic_version",
@@ -42,6 +42,7 @@ def test_upgrade_is_repeatable_downgrade_preserves_data_and_check_detects_drift(
                 "import_jobs",
                 "import_rows",
                 "transactions",
+                "transaction_creation_requests",
                 "transfers",
                 "users",
                 "user_sessions",
@@ -99,7 +100,7 @@ def test_cli_targets_only_the_temporary_database_from_an_unrelated_directory(
         if password in result.stdout + result.stderr:
             pytest.fail("Migration CLI exposed a database secret", pytrace=False)
         if arguments == ["current"]:
-            assert "0008_account_creation_requests (head)" in result.stdout
+            assert "0009_transaction_requests (head)" in result.stdout
 
     environment["FINSIGHT_DB_PASSWORD"] = "synthetic-invalid-migration-password"
     result = subprocess.run(

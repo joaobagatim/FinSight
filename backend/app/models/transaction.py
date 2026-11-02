@@ -15,6 +15,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
     and_,
     func,
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
 class Transaction(Base):
     __tablename__ = "transactions"
     __table_args__ = (
+        UniqueConstraint("user_id", "id", name="uq_transactions_user_id_id"),
         ForeignKeyConstraint(
             ["user_id", "account_id"],
             ["accounts.user_id", "accounts.id"],
