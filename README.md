@@ -1132,8 +1132,8 @@ Uma nova criação nessas entidades desativadas é rejeitada.
 `GET /api/v1/transactions` lista com `limit` padrão50/máximo100, `offset` e
 `has_more`, em ordem decrescente de data, criação e UUID. Filtros opcionais:
 `account_id`, `category_id`, `type`, `status`, `date_from` e `date_to` inclusivos.
-Intervalo invertido é inválido. Não há edição, exclusão ou efetivação de um
-planejado nesta etapa; essas operações serão implementadas separadamente.
+Intervalo invertido é inválido. Edição e exclusão serão implementadas separadamente;
+a efetivação de um planejado é descrita abaixo.
 As consultas individual e de lista também retornam `account_name` e
 `category_name`, com os nomes atuais das entidades vinculadas. O servidor carrega
 esses vínculos junto dos lançamentos, sem uma consulta adicional por item.
@@ -1208,7 +1208,44 @@ o controle de sessão existente.
 O banco de destino precisa estar na revisão `0009_transaction_requests` para criar
 lançamentos com segurança. A interface e o startup não aplicam a migration ao banco
 pessoal. Esta entrega não acrescenta schema, dependência, edição/exclusão de
-lançamentos, efetivação de planejados ou criação de transferências.
+lançamentos ou criação de transferências.
+
+### Efetivar um lançamento planejado
+
+Em **Lançamentos**, use **Efetivar** no movimento planejado. A tela consulta os
+dados atuais e pede confirmação com descrição, conta, categoria, valor e data.
+**Confirmar efetivação** altera o estado do mesmo registro para `posted`;
+não cria uma segunda receita/despesa nem muda o valor ou a data econômica.
+O movimento passa a compor o saldo a partir da data informada, que pode ser
+diferente de hoje. Planejados vencidos nunca são efetivados automaticamente.
+
+Para clientes da API, `GET /api/v1/transactions/{id}` agora fornece `ETag`.
+Envie `POST /api/v1/transactions/{id}/post` com corpo JSON `{}`, esse valor em
+`If-Match`, sessão, origem autorizada e CSRF. O corpo não aceita campos extras;
+não é uma rota de edição de dinheiro, referências ou data. A resposta200 contém
+o lançamento efetivado e seu ETag atual. If-Match ausente/inválido retorna422;
+um snapshot desatualizado retorna412. A autorização e a comparação acontecem
+dentro da transação com bloqueios de usuário/sessão/lançamento/referências.
+
+A repetição do mesmo snapshot planejado retorna o registro já efetivado quando
+apenas o status mudou; uma consulta atual também permite confirmar o estado já
+efetivado. Não há segunda contabilização, inclusive em duas abas. Se outros dados
+do snapshot mudaram, consulte novamente antes de confirmar. Conta/categoria
+inativas, tipo incompatível, data inválida ou vínculo de importação em um planejado
+impedem nova efetivação. Este fluxo é manual e não substitui confirmação de CSV.
+Histórico já efetivado pode ser consultado/reconhecido mesmo após arquivamento.
+
+O digest original da criação não é alterado: repetir a criação com a chave e o
+corpo originais retorna o mesmo ID, sem voltar o status para `planned`. Não há
+tabela de idempotência adicional ou migration nova para essa transição.
+
+Se a resposta da efetivação se perder, a tela bloqueia outra confirmação e oferece
+**Recarregar situação**. Se o servidor já efetivou, a leitura reconhece o resultado
+sem outro POST. Se os dados mudaram, a pessoa precisa revisar e confirmar novamente.
+O saldo mostrado anteriormente é retirado ao tentar efetivar e ao reconhecer
+um estado efetivado; consulte-o novamente para obter a posição atual. Enquanto
+houver uma criação financeira pendente, os botões de efetivação ficam desativados.
+Uma falha de commit mantém o lançamento planejado e o saldo inalterados.
 
 ## Categorias próprias pela API
 

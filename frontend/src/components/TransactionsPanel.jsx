@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api, errorMessage } from '@/services/api'
 import TransactionForm from '@/components/TransactionForm'
@@ -15,6 +15,8 @@ export default function TransactionsPanel({ ownerId, onExpired, intent, onIntent
     error: '',
   })
   const [revision, setRevision] = useState(0)
+  const [balanceRevision, setBalanceRevision] = useState(0)
+  const balanceChanged = useCallback(() => setBalanceRevision((value) => value + 1), [])
   const live = useRef(false)
   const fetching = useRef(false)
 
@@ -102,13 +104,19 @@ export default function TransactionsPanel({ ownerId, onExpired, intent, onIntent
     <div className="accounts-layout transactions-layout">
       <div className="transaction-overview">
         <AccountBalance
-          revision={revision}
+          revision={balanceRevision}
           ownerId={ownerId}
           accounts={references.accounts}
           loading={references.loading}
           onExpired={onExpired}
         />
-        <TransactionHistory key={`history-${revision}`} ownerId={ownerId} onExpired={onExpired} />
+        <TransactionHistory
+          key={`history-${revision}`}
+          ownerId={ownerId}
+          onExpired={onExpired}
+          disabled={Boolean(intent)}
+          onBalanceChanged={balanceChanged}
+        />
       </div>
       <div>
         <TransactionForm
@@ -117,7 +125,10 @@ export default function TransactionsPanel({ ownerId, onExpired, intent, onIntent
           intent={intent}
           onIntent={onIntent}
           onExpired={onExpired}
-          onSaved={() => setRevision((value) => value + 1)}
+          onSaved={() => {
+            setRevision((value) => value + 1)
+            balanceChanged()
+          }}
         />
         <div className="reference-actions">
           <Button
