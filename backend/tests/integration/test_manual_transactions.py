@@ -6,13 +6,13 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import event, func, insert, inspect, select
+from sqlalchemy import event, func, insert, inspect, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.api.dependencies import get_database
@@ -34,6 +34,7 @@ from app.schemas.transactions import TransactionInput, TransactionUpdateInput
 from app.services.sessions import AuthenticationDenied, SessionService, SessionUnavailable
 from app.services.transactions import (
     TransactionRejected,
+    TransactionRemoved,
     TransactionService,
     TransactionStale,
     transaction_etag,
@@ -442,8 +443,11 @@ def test_request_constraints_and_downgrade_preserve_financial_rows(context, reso
         token, uuid4(), TransactionInput(**body(own))
     )
     with database.engine.begin() as connection:
+        financial_columns = [
+            column for column in Transaction.__table__.columns if column.name != "deleted_at"
+        ]
         before = connection.execute(
-            select(Transaction.__table__).where(Transaction.id == transaction_id)
+            select(*financial_columns).where(Transaction.id == transaction_id)
         ).one()
         with pytest.raises(IntegrityError), connection.begin_nested():
             connection.execute(
@@ -460,7 +464,7 @@ def test_request_constraints_and_downgrade_preserve_financial_rows(context, reso
         assert "transaction_creation_requests" not in inspect(connection).get_table_names()
         assert (
             connection.execute(
-                select(Transaction.__table__).where(Transaction.id == transaction_id)
+                select(*financial_columns).where(Transaction.id == transaction_id)
             ).one()
             == before
         )
@@ -468,7 +472,7 @@ def test_request_constraints_and_downgrade_preserve_financial_rows(context, reso
         command.check(config)
         assert (
             connection.execute(
-                select(Transaction.__table__).where(Transaction.id == transaction_id)
+                select(*financial_columns).where(Transaction.id == transaction_id)
             ).one()
             == before
         )
@@ -844,3 +848,205 @@ def test_editing_concurrent_writers_do_not_overwrite_and_failures_roll_back(cont
         )
     with database.sessions() as session:
         assert session.get(Transaction, transaction_id).amount == current.amount
+
+
+@pytest.fixture
+def deletion_resources(context, resources):
+    yield resources
+    # Synthetic-only shared-fixture cleanup, so its downgrade can remove the test schema.
+    # Production has no restore operation; never bypass the downgrade guard there.
+    database = context[0]
+    assert database.engine.url.database.startswith("finsight_test_")
+    with database.sessions.begin() as session:
+        session.execute(
+            update(Transaction)
+            .where(Transaction.user_id.in_([item["owner"] for item in resources]))
+            .values(deleted_at=None)
+        )
+
+
+def test_deletion_http_is_conditional_owned_and_never_recreates_on_creation_retry(
+    context, deletion_resources
+):
+    resources = deletion_resources
+    stack, make = clients(context)
+    with stack:
+        client, other = make(context[3][0]), make(context[3][1])
+        key = uuid4()
+        data = body(resources[0])
+        created = create(client, data, key)
+        location = created.headers["location"]
+        snapshot = client.get(location)
+        headers = {
+            "Origin": ORIGIN,
+            "X-CSRF-Token": client.cookies.get("__Host-finsight-csrf"),
+            "If-Match": snapshot.headers["etag"],
+        }
+        assert balance(client, resources[0]).json()["balance"] == "850.00"
+        assert (
+            client.request("DELETE", location, json={}, headers={"Origin": ORIGIN}).status_code
+            == 403
+        )
+        assert (
+            client.request(
+                "DELETE",
+                location,
+                json={},
+                headers={k: v for k, v in headers.items() if k != "If-Match"},
+            ).status_code
+            == 422
+        )
+        rejected = client.request(
+            "DELETE", location, json={"user_id": "private-marker"}, headers=headers
+        )
+        assert rejected.status_code == 422 and "private-marker" not in rejected.text
+        assert (
+            client.request(
+                "DELETE", location, content="{}", headers=headers | {"Content-Type": "text/plain"}
+            ).status_code
+            == 415
+        )
+        assert (
+            client.request(
+                "DELETE",
+                location,
+                content='"' + "x" * 17000 + '"',
+                headers=headers | {"Content-Type": "application/json"},
+            ).status_code
+            == 413
+        )
+        foreign_headers = headers | {"X-CSRF-Token": other.cookies.get("__Host-finsight-csrf")}
+        denied = other.request("DELETE", location, json={}, headers=foreign_headers)
+        missing = other.request("DELETE", f"{PATH}/{uuid4()}", json={}, headers=foreign_headers)
+        assert denied.status_code == missing.status_code == 404 and denied.json() == missing.json()
+        assert (
+            client.request(
+                "DELETE", location, json={}, headers=headers | {"If-Match": '"' + "0" * 64 + '"'}
+            ).status_code
+            == 412
+        )
+        preflight = client.options(
+            location,
+            headers={
+                "Origin": ORIGIN,
+                "Access-Control-Request-Method": "DELETE",
+                "Access-Control-Request-Headers": "Content-Type,X-CSRF-Token,If-Match",
+            },
+        )
+        assert (
+            preflight.status_code == 200
+            and "DELETE" in preflight.headers["access-control-allow-methods"]
+        )
+        response = client.request("DELETE", location, json={}, headers=headers)
+        assert response.status_code == 204 and response.content == b""
+        assert response.headers["cache-control"] == "no-store"
+        assert client.request("DELETE", location, json={}, headers=headers).status_code == 204
+        assert client.get(location).status_code == 410
+        assert other.get(location).status_code == 404
+        assert client.get(PATH).json()["items"] == []
+        assert balance(client, resources[0]).json()["balance"] == "1000.00"
+        assert client.patch(location, json={"amount": "1.00"}, headers=headers).status_code == 410
+        assert client.post(location + "/post", json={}, headers=headers).status_code == 410
+        assert create(client, data, key).status_code == 410
+        assert create(client, data | {"amount": "1.00"}, key).status_code == 409
+        with context[0].sessions() as session:
+            row = session.get(Transaction, UUID(created.json()["id"]))
+            assert row.deleted_at is not None and row.amount == Decimal("150.00")
+            assert session.get(TransactionCreationRequest, (resources[0]["owner"], key)) is not None
+
+
+def test_deletion_races_with_edit_and_post_without_reviving_money(context, deletion_resources):
+    _, sessions, _, emails = context
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransactionService(sessions)
+    own = deletion_resources[0]
+    for status in ("posted", "planned"):
+        transaction_id = service.create(
+            token, uuid4(), TransactionInput(**body(own, status=status))
+        )
+        etag = transaction_etag(service.get(token, transaction_id))
+        barrier = Barrier(2)
+
+        def remove(barrier=barrier, transaction_id=transaction_id, etag=etag):
+            barrier.wait(timeout=10)
+            try:
+                service.delete(token, transaction_id, etag)
+                return "removed"
+            except TransactionStale:
+                return "stale"
+
+        def change(barrier=barrier, transaction_id=transaction_id, etag=etag, status=status):
+            barrier.wait(timeout=10)
+            try:
+                if status == "planned":
+                    service.post(token, transaction_id, etag)
+                else:
+                    service.update(
+                        token, transaction_id, TransactionUpdateInput(amount="200.00"), etag
+                    )
+                return "changed"
+            except TransactionRemoved:
+                return "removed"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(remove), executor.submit(change)]
+            outcomes = [future.result(timeout=20) for future in futures]
+        assert outcomes in (["removed", "removed"], ["stale", "changed"])
+        if outcomes[0] == "stale":
+            current = service.get(token, transaction_id)
+            service.delete(token, transaction_id, transaction_etag(current))
+        service.delete(token, transaction_id, etag)
+        with pytest.raises(TransactionRemoved):
+            service.get(token, transaction_id)
+        assert service.balance(token, own["account"], date(2026, 1, 4)).balance == Decimal(
+            "1000.00"
+        )
+
+
+def test_deletion_rejects_imports_and_commit_failures_but_allows_archived_manual_history(
+    context, deletion_resources
+):
+    database, sessions, _, emails = context
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransactionService(sessions)
+    own = deletion_resources[0]
+    transaction_id = service.create(token, uuid4(), TransactionInput(**body(own)))
+    snapshot = service.get(token, transaction_id)
+
+    def fail(_session):
+        raise SQLAlchemyError("synthetic deletion failure")
+
+    event.listen(database.sessions.class_, "before_commit", fail)
+    try:
+        with pytest.raises(SessionUnavailable):
+            service.delete(token, transaction_id, transaction_etag(snapshot))
+    finally:
+        event.remove(database.sessions.class_, "before_commit", fail)
+    assert service.get(token, transaction_id) == snapshot
+    assert service.balance(token, own["account"], date(2026, 1, 4)).balance == Decimal("850.00")
+    with database.sessions.begin() as session:
+        job = ImportJob(
+            user_id=own["owner"],
+            account_id=own["account"],
+            filename="synthetic.csv",
+            file_checksum="c" * 64,
+        )
+        session.add(job)
+        session.flush()
+        imported = ImportRow(
+            user_id=own["owner"], account_id=own["account"], import_job_id=job.id, row_number=1
+        )
+        session.add(imported)
+        session.flush()
+        session.get(Transaction, transaction_id).import_row_id = imported.id
+    with pytest.raises(TransactionRejected):
+        service.delete(token, transaction_id, transaction_etag(snapshot))
+    with database.sessions.begin() as session:
+        session.get(Transaction, transaction_id).import_row_id = None
+        session.get(Account, own["account"]).is_active = False
+        session.get(Category, own["expense"]).is_active = False
+    service.delete(token, transaction_id, transaction_etag(snapshot))
+    assert service.balance(token, own["account"], date(2026, 1, 4)).balance == Decimal("1000.00")
+    sessions.revoke_by_access(token)
+    with pytest.raises(AuthenticationDenied):
+        service.delete(token, transaction_id, transaction_etag(snapshot))

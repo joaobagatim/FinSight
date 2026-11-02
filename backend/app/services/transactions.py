@@ -38,6 +38,10 @@ class TransactionStale(Exception):
     pass
 
 
+class TransactionRemoved(Exception):
+    pass
+
+
 def transaction_etag(data: TransactionResponse) -> str:
     canonical = json.dumps(data.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return '"' + hashlib.sha256(canonical.encode()).hexdigest() + '"'
@@ -55,6 +59,8 @@ class TransactionService:
             if previous is not None:
                 if not hmac.compare_digest(previous.request_hash, digest):
                     raise TransactionConflict()
+                if previous.transaction.deleted_at is not None:
+                    raise TransactionRemoved()
                 transaction_id = previous.transaction_id
             else:
                 account = session.scalar(
@@ -110,7 +116,7 @@ class TransactionService:
             query = (
                 select(Transaction)
                 .options(joinedload(Transaction.account), joinedload(Transaction.category))
-                .where(Transaction.user_id == owner.user_id)
+                .where(Transaction.user_id == owner.user_id, Transaction.deleted_at.is_(None))
             )
             for field, value in (
                 (Transaction.account_id, account_id),
@@ -150,6 +156,8 @@ class TransactionService:
             )
             if row is None:
                 raise TransactionNotFound()
+            if row.deleted_at is not None:
+                raise TransactionRemoved()
             result = TransactionResponse.model_validate(row)
         return result
 
@@ -165,6 +173,8 @@ class TransactionService:
             )
             if row is None:
                 raise TransactionNotFound()
+            if row.deleted_at is not None:
+                raise TransactionRemoved()
             current = TransactionResponse.model_validate(row)
             if not hmac.compare_digest(transaction_etag(current), etag):
                 raise TransactionStale()
@@ -202,6 +212,27 @@ class TransactionService:
             result = TransactionResponse.model_validate(row)
         return result
 
+    def delete(self, token: SecretStr, transaction_id: UUID, etag: str) -> None:
+        with self.sessions.authorized_transaction(token, lock=True) as (session, owner):
+            row = session.scalar(
+                select(Transaction)
+                .where(Transaction.id == transaction_id, Transaction.user_id == owner.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if row is None:
+                raise TransactionNotFound()
+            if row.deleted_at is None:
+                if not hmac.compare_digest(
+                    transaction_etag(TransactionResponse.model_validate(row)), etag
+                ):
+                    raise TransactionStale()
+                if row.import_row_id is not None:
+                    raise TransactionRejected()
+                # Keep the row, owner and immutable creation identity; never restore via retry.
+                row.deleted_at = func.now()
+                session.flush()
+
     def post(self, token: SecretStr, transaction_id: UUID, etag: str) -> TransactionResponse:
         with self.sessions.authorized_transaction(token, lock=True) as (session, owner):
             row = session.scalar(
@@ -212,6 +243,8 @@ class TransactionService:
             )
             if row is None:
                 raise TransactionNotFound()
+            if row.deleted_at is not None:
+                raise TransactionRemoved()
             account = session.scalar(
                 select(Account)
                 .where(Account.id == row.account_id, Account.user_id == owner.user_id)
@@ -268,6 +301,7 @@ class TransactionService:
                     Transaction.user_id == owner.user_id,
                     Transaction.account_id == Account.id,
                     Transaction.status == "posted",
+                    Transaction.deleted_at.is_(None),
                     Transaction.effective_date > Account.opening_date,
                     Transaction.effective_date <= as_of,
                 )

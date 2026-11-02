@@ -114,6 +114,20 @@ def post_transaction(
     return result
 
 
+@router.delete("/{transaction_id}", status_code=204)
+def delete_transaction(
+    transaction_id: UUID,
+    data: TransactionPostInput,
+    token: Annotated[SecretStr, Depends(category_mutation)],
+    service: Annotated[TransactionService, Depends(transaction_service)],
+    etag: Annotated[
+        str, Header(alias="If-Match", min_length=66, max_length=66, pattern=r'^"[0-9a-f]{64}"$')
+    ],
+):
+    service.delete(token, transaction_id, etag)
+    return Response(status_code=204)
+
+
 @balance_router.get("/{account_id}/balance", response_model=AccountBalanceResponse)
 def get_balance(
     account_id: UUID,
