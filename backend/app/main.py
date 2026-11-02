@@ -38,7 +38,12 @@ from app.services.sessions import (
     ProfileUpdateRejected,
     SessionUnavailable,
 )
-from app.services.transactions import TransactionConflict, TransactionNotFound, TransactionRejected
+from app.services.transactions import (
+    TransactionConflict,
+    TransactionNotFound,
+    TransactionRejected,
+    TransactionStale,
+)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -134,6 +139,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.exception_handler(TransactionConflict)
     async def transaction_conflict(_request, _error):
         return JSONResponse({"detail": "Idempotency key conflict"}, status_code=409)
+
+    @application.exception_handler(TransactionStale)
+    async def transaction_stale(_request, _error):
+        return JSONResponse(
+            {"detail": "Transaction changed; reload before posting"}, status_code=412
+        )
 
     @application.exception_handler(Exception)
     async def unexpected_error(request, _error):

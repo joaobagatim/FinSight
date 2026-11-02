@@ -20,10 +20,24 @@ from app.core.config import Settings
 from app.core.security import hash_password
 from app.db.session import Database
 from app.main import create_app
-from app.models import Account, Category, Transaction, TransactionCreationRequest, Transfer, User
+from app.models import (
+    Account,
+    Category,
+    ImportJob,
+    ImportRow,
+    Transaction,
+    TransactionCreationRequest,
+    Transfer,
+    User,
+)
 from app.schemas.transactions import TransactionInput
-from app.services.sessions import SessionService, SessionUnavailable
-from app.services.transactions import TransactionService
+from app.services.sessions import AuthenticationDenied, SessionService, SessionUnavailable
+from app.services.transactions import (
+    TransactionRejected,
+    TransactionService,
+    TransactionStale,
+    transaction_etag,
+)
 
 pytestmark = pytest.mark.postgres
 PASSWORD = "synthetic transaction password"
@@ -458,3 +472,179 @@ def test_request_constraints_and_downgrade_preserve_financial_rows(context, reso
             ).one()
             == before
         )
+
+
+def test_posting_http_is_conditional_owned_and_preserves_creation_retry(context, resources):
+    stack, make = clients(context)
+    with stack:
+        client, other = make(context[3][0]), make(context[3][1])
+        key = uuid4()
+        data = body(resources[0], status="planned")
+        created = create(client, data, key)
+        location = created.headers["location"]
+        snapshot = client.get(location)
+        etag = snapshot.headers["etag"]
+        headers = {
+            "Origin": ORIGIN,
+            "X-CSRF-Token": client.cookies.get("__Host-finsight-csrf"),
+            "If-Match": etag,
+        }
+        assert balance(client, resources[0]).json()["balance"] == "1000.00"
+        assert (
+            client.post(
+                location + "/post",
+                json={},
+                headers={k: v for k, v in headers.items() if k != "If-Match"},
+            ).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                location + "/post", json={}, headers={"Origin": ORIGIN, "If-Match": etag}
+            ).status_code
+            == 403
+        )
+        rejected = client.post(
+            location + "/post", json={"amount": "private-marker"}, headers=headers
+        )
+        assert rejected.status_code == 422 and "private-marker" not in rejected.text
+        assert (
+            client.post(
+                location + "/post", json={}, headers=headers | {"If-Match": '"' + "0" * 64 + '"'}
+            ).status_code
+            == 412
+        )
+        foreign_headers = headers | {"X-CSRF-Token": other.cookies.get("__Host-finsight-csrf")}
+        foreign = other.post(location + "/post", json={}, headers=foreign_headers)
+        missing = other.post(f"{PATH}/{uuid4()}/post", json={}, headers=foreign_headers)
+        assert (
+            foreign.status_code == missing.status_code == 404 and foreign.json() == missing.json()
+        )
+        response = client.post(location + "/post", json={}, headers=headers)
+        assert response.status_code == 200 and response.json() == snapshot.json() | {
+            "status": "posted"
+        }
+        assert response.headers["etag"] != etag
+        assert response.headers["cache-control"] == "no-store"
+        assert "ETag" in response.headers["access-control-expose-headers"]
+        assert balance(client, resources[0]).json()["balance"] == "850.00"
+        assert client.post(location + "/post", json={}, headers=headers).json() == response.json()
+        assert (
+            client.post(
+                location + "/post",
+                json={},
+                headers=headers | {"If-Match": response.headers["etag"]},
+            ).status_code
+            == 200
+        )
+        assert create(client, data, key).json() == created.json()
+        assert client.get(location).json()["status"] == "posted"
+        assert balance(client, resources[0]).json()["balance"] == "850.00"
+
+
+def test_posting_rechecks_snapshot_active_references_and_manual_origin(context, resources):
+    database, sessions, _, emails = context
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransactionService(sessions)
+    own = resources[0]
+    transaction_id = service.create(token, uuid4(), TransactionInput(**body(own, status="planned")))
+    original = service.get(token, transaction_id)
+    with database.sessions.begin() as session:
+        session.get(Category, own["expense"]).name = "Renamed before confirmation"
+    with pytest.raises(TransactionStale):
+        service.post(token, transaction_id, transaction_etag(original))
+    current = service.get(token, transaction_id)
+    for model, record in ((Account, own["account"]), (Category, own["expense"])):
+        with database.sessions.begin() as session:
+            session.get(model, record).is_active = False
+        with pytest.raises(TransactionRejected):
+            service.post(token, transaction_id, transaction_etag(current))
+        with database.sessions.begin() as session:
+            session.get(model, record).is_active = True
+    with database.sessions.begin() as session:
+        session.get(Transaction, transaction_id).effective_date = date(2026, 1, 1)
+    invalid_date = service.get(token, transaction_id)
+    with pytest.raises(TransactionRejected):
+        service.post(token, transaction_id, transaction_etag(invalid_date))
+    with database.sessions.begin() as session:
+        job = ImportJob(
+            user_id=own["owner"],
+            account_id=own["account"],
+            filename="synthetic.csv",
+            file_checksum="a" * 64,
+        )
+        session.add(job)
+        session.flush()
+        imported = ImportRow(
+            user_id=own["owner"], account_id=own["account"], import_job_id=job.id, row_number=1
+        )
+        session.add(imported)
+        session.flush()
+        row = session.get(Transaction, transaction_id)
+        row.effective_date = date(2026, 1, 2)
+        row.import_row_id = imported.id
+    imported_snapshot = service.get(token, transaction_id)
+    with pytest.raises(TransactionRejected):
+        service.post(token, transaction_id, transaction_etag(imported_snapshot))
+    assert service.get(token, transaction_id).status == "planned"
+    assert service.balance(token, own["account"], date(2026, 1, 4)).balance == Decimal("1000.00")
+
+
+def test_posting_concurrent_confirmations_book_one_movement_and_allow_archived_replay(
+    context, resources
+):
+    database, sessions, _, emails = context
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransactionService(sessions)
+    own = resources[0]
+    transaction_id = service.create(token, uuid4(), TransactionInput(**body(own, status="planned")))
+    etag = transaction_etag(service.get(token, transaction_id))
+    barrier = Barrier(2)
+
+    def confirm():
+        barrier.wait(timeout=10)
+        return service.post(token, transaction_id, etag)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(confirm) for _ in range(2)]
+        posted = [future.result(timeout=20) for future in futures]
+    assert all(row.id == transaction_id and row.status == "posted" for row in posted)
+    with database.sessions.begin() as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(Transaction)
+                .where(Transaction.user_id == own["owner"])
+            )
+            == 1
+        )
+        session.get(Account, own["account"]).is_active = False
+        session.get(Category, own["expense"]).is_active = False
+    assert service.post(token, transaction_id, etag).status == "posted"
+    assert service.balance(token, own["account"], date(2026, 1, 4)).balance == Decimal("850.00")
+
+
+def test_posting_commit_failure_and_revocation_leave_planned_balance_unchanged(context, resources):
+    database, sessions, _, emails = context
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransactionService(sessions)
+    own = resources[0]
+    transaction_id = service.create(token, uuid4(), TransactionInput(**body(own, status="planned")))
+    snapshot = service.get(token, transaction_id)
+
+    def fail(_session):
+        raise SQLAlchemyError("synthetic posting failure")
+
+    event.listen(database.sessions.class_, "before_commit", fail)
+    try:
+        with pytest.raises(SessionUnavailable):
+            service.post(token, transaction_id, transaction_etag(snapshot))
+    finally:
+        event.remove(database.sessions.class_, "before_commit", fail)
+    assert service.get(token, transaction_id) == snapshot
+    assert service.balance(token, own["account"], date(2026, 1, 4)).balance == Decimal("1000.00")
+    sessions.revoke_by_access(token)
+    with pytest.raises(AuthenticationDenied):
+        service.post(token, transaction_id, transaction_etag(snapshot))
+    with database.sessions() as session:
+        assert session.get(Transaction, transaction_id).status == "planned"

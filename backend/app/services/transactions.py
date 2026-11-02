@@ -33,6 +33,15 @@ class TransactionConflict(Exception):
     pass
 
 
+class TransactionStale(Exception):
+    pass
+
+
+def transaction_etag(data: TransactionResponse) -> str:
+    canonical = json.dumps(data.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return '"' + hashlib.sha256(canonical.encode()).hexdigest() + '"'
+
+
 class TransactionService:
     def __init__(self, sessions: SessionService):
         self.sessions = sessions
@@ -141,6 +150,54 @@ class TransactionService:
             if row is None:
                 raise TransactionNotFound()
             result = TransactionResponse.model_validate(row)
+        return result
+
+    def post(self, token: SecretStr, transaction_id: UUID, etag: str) -> TransactionResponse:
+        with self.sessions.authorized_transaction(token, lock=True) as (session, owner):
+            row = session.scalar(
+                select(Transaction)
+                .where(Transaction.id == transaction_id, Transaction.user_id == owner.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if row is None:
+                raise TransactionNotFound()
+            account = session.scalar(
+                select(Account)
+                .where(Account.id == row.account_id, Account.user_id == owner.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            category = session.scalar(
+                select(Category)
+                .where(Category.id == row.category_id, Category.user_id == owner.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if account is None or category is None:
+                raise TransactionRejected()
+            current = TransactionResponse.model_validate(row)
+            matches = hmac.compare_digest(transaction_etag(current), etag)
+            if row.status == "posted":
+                # Repeating the same confirmed planned snapshot cannot book a second movement.
+                planned = current.model_copy(update={"status": "planned"})
+                if not matches and not hmac.compare_digest(transaction_etag(planned), etag):
+                    raise TransactionStale()
+                result = current
+            else:
+                if not matches:
+                    raise TransactionStale()
+                if (
+                    not account.is_active
+                    or not category.is_active
+                    or category.type != row.type
+                    or row.effective_date <= account.opening_date
+                    or row.import_row_id is not None
+                ):
+                    raise TransactionRejected()
+                row.status = "posted"
+                session.flush()
+                result = TransactionResponse.model_validate(row)
         return result
 
     def balance(self, token: SecretStr, account_id: UUID, as_of: date):

@@ -4,7 +4,7 @@ from datetime import date
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import SecretStr
 
 from app.api.dependencies import get_session_service
@@ -16,10 +16,11 @@ from app.schemas.transactions import (
     TransactionCreatedResponse,
     TransactionInput,
     TransactionListResponse,
+    TransactionPostInput,
     TransactionResponse,
 )
 from app.services.sessions import SessionService
-from app.services.transactions import TransactionService
+from app.services.transactions import TransactionService, transaction_etag
 
 router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
 balance_router = APIRouter(prefix="/api/v1/accounts", tags=["accounts"])
@@ -71,10 +72,29 @@ def list_transactions(
 @router.get("/{transaction_id}", response_model=TransactionResponse)
 def get_transaction(
     transaction_id: UUID,
+    response: Response,
     token: Annotated[SecretStr, Depends(account_access)],
     service: Annotated[TransactionService, Depends(transaction_service)],
 ):
-    return service.get(token, transaction_id)
+    result = service.get(token, transaction_id)
+    response.headers["ETag"] = transaction_etag(result)
+    return result
+
+
+@router.post("/{transaction_id}/post", response_model=TransactionResponse)
+def post_transaction(
+    transaction_id: UUID,
+    data: TransactionPostInput,
+    response: Response,
+    token: Annotated[SecretStr, Depends(category_mutation)],
+    service: Annotated[TransactionService, Depends(transaction_service)],
+    etag: Annotated[
+        str, Header(alias="If-Match", min_length=66, max_length=66, pattern=r'^"[0-9a-f]{64}"$')
+    ],
+):
+    result = service.post(token, transaction_id, etag)
+    response.headers["ETag"] = transaction_etag(result)
+    return result
 
 
 @balance_router.get("/{account_id}/balance", response_model=AccountBalanceResponse)
