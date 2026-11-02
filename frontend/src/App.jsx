@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import BrandMark from './components/BrandMark.jsx'
 import AuthPanel from './components/AuthPanel.jsx'
 import AccountsPanel from './components/AccountsPanel.jsx'
+import CategoriesPanel from './components/CategoriesPanel.jsx'
 import { api, errorMessage, watchSessionChanges } from '@/services/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -129,7 +130,7 @@ export default function App() {
               </a>
             </Button>
           )}
-          {view !== 'accounts' && (
+          {!['accounts', 'categories'].includes(view) && (
             <Button type="button" size="sm" onClick={enter} disabled={busy}>
               {busy ? 'Aguarde…' : user ? 'Minhas contas' : 'Acessar FinSight'}
             </Button>
@@ -149,14 +150,36 @@ export default function App() {
           </p>
         )}
         {view === 'access' && <AuthPanel onAuthenticated={authenticated} />}
-        {view === 'accounts' && user && (
+        {['accounts', 'categories'].includes(view) && user && (
           <section className="workspace">
             <p className="eyebrow">Seu espaço</p>
             <h1>Olá, {user.name}.</h1>
             <p className="muted workspace-description">
-              Vamos organizar suas contas, um passo de cada vez.
+              Organize suas contas e as categorias das suas receitas e despesas.
             </p>
-            <AccountsPanel key={user.id} ownerId={user.id} onExpired={expired} />
+            <nav className="account-actions workspace-navigation" aria-label="Área financeira">
+              <Button
+                type="button"
+                variant={view === 'accounts' ? 'default' : 'outline'}
+                aria-current={view === 'accounts' ? 'page' : undefined}
+                onClick={() => setView('accounts')}
+              >
+                Contas
+              </Button>
+              <Button
+                type="button"
+                variant={view === 'categories' ? 'default' : 'outline'}
+                aria-current={view === 'categories' ? 'page' : undefined}
+                onClick={() => setView('categories')}
+              >
+                Categorias
+              </Button>
+            </nav>
+            {view === 'accounts' ? (
+              <AccountsPanel key={user.id} ownerId={user.id} onExpired={expired} />
+            ) : (
+              <CategoriesPanel key={user.id} ownerId={user.id} onExpired={expired} />
+            )}
           </section>
         )}
         {view === 'home' && (

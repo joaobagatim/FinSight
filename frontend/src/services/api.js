@@ -120,6 +120,31 @@ async function authenticatedRead(path) {
 }
 
 export const api = {
+  categories: (ownerId, offset = 0) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/categories?limit=50&offset=${offset}`)
+      if (!Array.isArray(result?.items)) throw new ApiError(0)
+      return result
+    }),
+  category: (ownerId, id) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      return send(`/categories/${encodeURIComponent(id)}`, { versioned: true })
+    }),
+  saveCategory: (ownerId, data, id, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      return send(id ? `/categories/${encodeURIComponent(id)}` : '/categories', {
+        method: id ? 'PATCH' : 'POST',
+        data,
+        versioned: true,
+        headers: { 'X-CSRF-Token': await bootstrap(), ...(id ? { 'If-Match': etag } : {}) },
+      })
+    }),
   account: (ownerId, id) =>
     coordinated(async () => {
       const profile = await renewUnlocked()

@@ -1086,9 +1086,10 @@ sem avaliação e autorização específicas.
 ## Categorias próprias pela API
 
 `POST /api/v1/categories` cria uma categoria de receita (`income`) ou despesa
-(`expense`). Envie `name` com até100 caracteres e `type`; `color` é opcional
-no formato `#RRGGBB`, e `icon` é um identificador opcional com até50 caracteres
-minúsculos, números e hífen. Não envie HTML, URLs ou `user_id`.
+(`expense`). Envie `name` com até 100 caracteres e `type`; `color` é opcional
+no formato `#RRGGBB`, e `icon` é um identificador opcional com até 50 caracteres,
+iniciado por letra minúscula e seguido de letras minúsculas, números ou hífen.
+Não envie HTML, URLs ou `user_id`.
 
 `GET /api/v1/categories` retorna `items`, `limit`, `offset` e `has_more`, com
 paginação padrão50/máximo100 e filtro opcional `type=income` ou `type=expense`.
@@ -1113,6 +1114,19 @@ O cadastro de categoria não usa chave de idempotência. Após resposta ambígua
 consulte a lista antes de cadastrar novamente; a API não repete a mutação.
 Nomes iguais são permitidos para tipos ou proprietários diferentes. Não são
 criadas categorias padrão automaticamente nesta entrega.
+
+Na área autenticada, abra **Categorias** para cadastrar classificações de receitas
+ou despesas. A lista inclui as categorias desativadas, com identificação explícita.
+Use **Editar** para renomear; o tipo fica protegido. **Desativar/Reativar** abre
+uma confirmação que explica a preservação do histórico.
+
+Se outra aba alterar a categoria, a tela mantém seu rascunho e pede para recarregar
+os dados antes de salvar. Essa recarga substitui o rascunho. Após resposta ambígua
+no cadastro, **Conferir categorias** atualiza a lista sem reenviar o POST; confira
+o resultado antes de começar outra tentativa. O formulário fica bloqueado até
+essa consulta terminar com sucesso. Navegar para outra área descarta o rascunho
+mantido somente em memória. Cor e ícone são opcionais pela API, ainda sem seletores
+nessa interface. Não há receitas, despesas ou cálculos de saldo nesta entrega.
 
 ## Edição e arquivamento de contas pela API
 
