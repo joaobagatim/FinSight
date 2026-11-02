@@ -1,12 +1,25 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api, errorMessage } from '@/services/api'
 import { formatDate, formatMoney } from '@/lib/money'
+import PostTransactionPanel from '@/components/PostTransactionPanel'
 
-export default function TransactionHistory({ ownerId, onExpired }) {
+export default function TransactionHistory({ ownerId, onExpired, disabled, onBalanceChanged }) {
   const [page, setPage] = useState({ items: [], has_more: false })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [postingId, setPostingId] = useState(null)
+  const heading = useRef(null)
+  const resolved = useCallback(
+    (item) => {
+      setPage((previous) => ({
+        ...previous,
+        items: previous.items.map((row) => (row.id === item.id ? item : row)),
+      }))
+      onBalanceChanged()
+    },
+    [onBalanceChanged],
+  )
   const live = useRef(false)
   const requestVersion = useRef(0)
 
@@ -57,14 +70,16 @@ export default function TransactionHistory({ ownerId, onExpired }) {
     <section aria-labelledby="history-heading" aria-busy={loading}>
       <div className="section-bar">
         <div>
-          <h2 id="history-heading">Seus lançamentos</h2>
+          <h2 id="history-heading" tabIndex={-1} ref={heading}>
+            Seus lançamentos
+          </h2>
           <p className="muted">Receitas e despesas, da mais recente para a mais antiga.</p>
         </div>
         <Button
           type="button"
           variant="outline"
           size="sm"
-          disabled={loading}
+          disabled={loading || Boolean(postingId)}
           onClick={() => reload()}
         >
           Atualizar lançamentos
@@ -81,6 +96,21 @@ export default function TransactionHistory({ ownerId, onExpired }) {
           <h3>Seu histórico começa aqui.</h3>
           <p>Registre o primeiro movimento para acompanhar sua conta.</p>
         </div>
+      )}
+      {postingId && (
+        <PostTransactionPanel
+          key={postingId}
+          ownerId={ownerId}
+          transactionId={postingId}
+          disabled={disabled}
+          onExpired={onExpired}
+          onResolved={resolved}
+          onAttempt={onBalanceChanged}
+          onClose={() => {
+            setPostingId(null)
+            heading.current?.focus()
+          }}
+        />
       )}
       <ul className="account-cards" aria-label="Lançamentos cadastrados">
         {page.items.map((item) => (
@@ -108,6 +138,19 @@ export default function TransactionHistory({ ownerId, onExpired }) {
                 <dd>{formatDate(item.effective_date)}</dd>
               </div>
             </dl>
+            {item.status === 'planned' && (
+              <div className="account-actions">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={loading || disabled || Boolean(postingId)}
+                  onClick={() => setPostingId(item.id)}
+                >
+                  Efetivar
+                </Button>
+              </div>
+            )}
             {item.notes && (
               <details className="movement-notes">
                 <summary>Observações</summary>
@@ -118,13 +161,18 @@ export default function TransactionHistory({ ownerId, onExpired }) {
         ))}
       </ul>
       {page.has_more && (
-        <Button type="button" variant="outline" disabled={loading} onClick={() => reload(true)}>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={loading || Boolean(postingId)}
+          onClick={() => reload(true)}
+        >
           Carregar mais lançamentos
         </Button>
       )}
       <p className="field-hint">
-        Planejados não alteram o saldo real. Alteração, exclusão e efetivação de planejados estarão
-        disponíveis em outra etapa.
+        Planejados não alteram o saldo real até você confirmar sua efetivação. Alteração e exclusão
+        estarão disponíveis em outra etapa.
       </p>
     </section>
   )
