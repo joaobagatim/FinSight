@@ -1101,8 +1101,12 @@ Arquivar preserva a conta, o saldo inicial e os registros financeiros relacionad
 não há exclusão de histórico. Contas de outra pessoa e inexistentes retornam o
 mesmo 404. Respostas usam `no-store`; o CORS das contas permite PATCH/If-Match
 e expõe ETag para a origem autorizada. Não há nova migration ou dependência.
-Nesta etapa, esses recursos estão disponíveis pela API; a interface de edição
-e arquivamento ainda está pendente.
+A interface autenticada também oferece edição, arquivamento e reativação.
+Arquivar exige confirmação e mantém a conta na lista com a indicação de arquivada.
+O formulário consulta os dados atuais antes de permitir salvar. Se houver conflito,
+preserva o rascunho, bloqueia o envio e pede para recarregar e revisar os dados.
+Se uma resposta se perder, também exige consultar o estado antes de nova tentativa;
+não repete silenciosamente a alteração. Recarregar substitui o rascunho local.
 
 ## Cadastrar, listar e consultar contas próprias
 
@@ -1251,5 +1255,6 @@ Nos testes autenticados, `VITE_API_BASE_URL` aponta apenas para a API descartáv
 Os testes de navegador cobrem o fluxo de acesso, contas em tela estreita,
 separação entre usuários, repetição após resposta perdida, renovação em duas abas
 e limpeza após logout. Localmente são selecionados novos/afetados; o CI executa
-o conjunto completo. Não há nova dependência, edição/arquivamento de contas,
-categorias, lançamentos, dashboard ou mudança de schema nesta entrega de interface.
+o conjunto completo. A edição e o arquivamento também têm cenários de duas abas,
+conflito de edição e resposta perdida. Não há nova dependência, categorias,
+lançamentos, dashboard ou mudança de schema nesta entrega de interface.
