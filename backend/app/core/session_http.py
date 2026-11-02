@@ -25,8 +25,16 @@ def is_account_path(path: str) -> bool:
     return path == ACCOUNTS_PATH or path.startswith(ACCOUNTS_PATH + "/")
 
 
+def is_category_path(path: str) -> bool:
+    return path == "/api/v1/categories" or path.startswith("/api/v1/categories/")
+
+
+def is_financial_path(path: str) -> bool:
+    return is_account_path(path) or is_category_path(path)
+
+
 def is_session_path(path: str) -> bool:
-    return path in SESSION_PATHS or is_account_path(path)
+    return path in SESSION_PATHS or is_financial_path(path)
 
 
 class SessionHttpLimits:
@@ -95,7 +103,7 @@ class SessionHttpMiddleware:
         for key, _ in scope["headers"]:
             key = key.lower()
             if key in _SINGLE_HEADERS or (
-                key in {b"idempotency-key", b"if-match"} and is_account_path(scope["path"])
+                key in {b"idempotency-key", b"if-match"} and is_financial_path(scope["path"])
             ):
                 if key in seen:
                     await reject(403, "Authentication request rejected")
@@ -111,7 +119,7 @@ class SessionHttpMiddleware:
             await reject(429, "Authentication limit reached", retry)
             return
         if scope["method"] != "POST" and not (
-            (scope["path"] == PROFILE_PATH or is_account_path(scope["path"]))
+            (scope["path"] == PROFILE_PATH or is_financial_path(scope["path"]))
             and scope["method"] == "PATCH"
         ):
             await self.app(scope, receive, no_store)
@@ -126,7 +134,7 @@ class SessionHttpMiddleware:
         bound = (
             self.settings.auth_login_body_bytes
             if scope["path"] in {"/api/v1/auth/login", PASSWORD_CHANGE_PATH, PROFILE_PATH}
-            or is_account_path(scope["path"])
+            or is_financial_path(scope["path"])
             else self.settings.auth_body_bytes
         )
         body = bytearray()
@@ -189,7 +197,7 @@ class SessionCorsMiddleware:
         handler = self.session if scope.get("path") in SESSION_PATHS else self.other
         if scope.get("path") == PROFILE_PATH:
             handler = self.profile
-        if is_account_path(scope.get("path", "")):
+        if is_financial_path(scope.get("path", "")):
             handler = self.accounts
         if scope["type"] == "http" and is_session_path(scope["path"]):
 
@@ -206,7 +214,7 @@ class SessionCorsMiddleware:
             for key, _ in scope["headers"]:
                 key = key.lower()
                 if key in _SINGLE_HEADERS or (
-                    key in {b"idempotency-key", b"if-match"} and is_account_path(scope["path"])
+                    key in {b"idempotency-key", b"if-match"} and is_financial_path(scope["path"])
                 ):
                     if key in seen:
                         await JSONResponse(
