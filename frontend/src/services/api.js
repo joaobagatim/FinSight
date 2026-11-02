@@ -129,6 +129,29 @@ export const api = {
         throw new ApiError(0)
       return result
     }),
+  updateTransaction: (ownerId, id, data, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send(`/transactions/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          data,
+          versioned: true,
+          headers: { 'If-Match': etag, 'X-CSRF-Token': await bootstrap() },
+        })
+        if (result.data?.id !== id) throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
   postTransaction: (ownerId, id, etag) =>
     coordinated(async () => {
       const profile = await renewUnlocked()

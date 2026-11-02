@@ -16,6 +16,7 @@ export default function TransactionsPanel({ ownerId, onExpired, intent, onIntent
   })
   const [revision, setRevision] = useState(0)
   const [balanceRevision, setBalanceRevision] = useState(0)
+  const [actionOpen, setActionOpen] = useState(false)
   const balanceChanged = useCallback(() => setBalanceRevision((value) => value + 1), [])
   const live = useRef(false)
   const fetching = useRef(false)
@@ -116,11 +117,14 @@ export default function TransactionsPanel({ ownerId, onExpired, intent, onIntent
           onExpired={onExpired}
           disabled={Boolean(intent)}
           onBalanceChanged={balanceChanged}
+          references={references}
+          onActionChange={setActionOpen}
         />
       </div>
       <div>
         <TransactionForm
           ownerId={ownerId}
+          disabled={actionOpen}
           references={references}
           intent={intent}
           onIntent={onIntent}

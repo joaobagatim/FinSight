@@ -30,7 +30,7 @@ from app.models import (
     Transfer,
     User,
 )
-from app.schemas.transactions import TransactionInput
+from app.schemas.transactions import TransactionInput, TransactionUpdateInput
 from app.services.sessions import AuthenticationDenied, SessionService, SessionUnavailable
 from app.services.transactions import (
     TransactionRejected,
@@ -648,3 +648,199 @@ def test_posting_commit_failure_and_revocation_leave_planned_balance_unchanged(c
         service.post(token, transaction_id, transaction_etag(snapshot))
     with database.sessions() as session:
         assert session.get(Transaction, transaction_id).status == "planned"
+
+
+def test_editing_http_is_owned_conditional_and_preserves_creation_identity(context, resources):
+    stack, make = clients(context)
+    with stack:
+        client, other = make(context[3][0]), make(context[3][1])
+        own, foreign = resources
+        key = uuid4()
+        original = body(own, notes="Original note")
+        created = create(client, original, key)
+        location = created.headers["location"]
+        snapshot = client.get(location)
+        headers = {
+            "Origin": ORIGIN,
+            "X-CSRF-Token": client.cookies.get("__Host-finsight-csrf"),
+            "If-Match": snapshot.headers["etag"],
+        }
+        patch = {"amount": "200.10", "description": " Updated ", "notes": None}
+        assert client.patch(location, json=patch, headers={"Origin": ORIGIN}).status_code == 403
+        assert (
+            client.patch(
+                location, json=patch, headers={k: v for k, v in headers.items() if k != "If-Match"}
+            ).status_code
+            == 422
+        )
+        invalid = client.patch(location, json={"user_id": "private-marker"}, headers=headers)
+        assert invalid.status_code == 422 and "private-marker" not in invalid.text
+        assert (
+            client.patch(location, json={"status": "planned"}, headers=headers).status_code == 422
+        )
+        foreign_headers = headers | {"X-CSRF-Token": other.cookies.get("__Host-finsight-csrf")}
+        denied = other.patch(location, json=patch, headers=foreign_headers)
+        missing = other.patch(f"{PATH}/{uuid4()}", json=patch, headers=foreign_headers)
+        assert denied.status_code == missing.status_code == 404 and denied.json() == missing.json()
+        assert (
+            client.patch(
+                location, json={"account_id": str(foreign["account"])}, headers=headers
+            ).status_code
+            == 422
+        )
+        response = client.patch(location, json=patch, headers=headers)
+        assert response.status_code == 200
+        assert response.json() == snapshot.json() | {
+            "amount": "200.10",
+            "description": "Updated",
+            "notes": None,
+        }
+        assert response.headers["etag"] != snapshot.headers["etag"]
+        assert response.headers["cache-control"] == "no-store"
+        assert balance(client, own).json()["balance"] == "799.90"
+        assert client.patch(location, json={"amount": "250.00"}, headers=headers).status_code == 412
+        assert create(client, original, key).json() == created.json()
+        assert client.get(location).json() == response.json()
+        assert create(client, original | {"amount": "200.10"}, key).status_code == 409
+
+
+def test_editing_moves_exact_balances_and_rechecks_references_dates_and_imports(context, resources):
+    database, sessions, _, emails = context
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransactionService(sessions)
+    own = resources[0]
+    transaction_id = service.create(token, uuid4(), TransactionInput(**body(own)))
+    with database.sessions.begin() as session:
+        target = Account(
+            user_id=own["owner"],
+            name="Target",
+            type="savings",
+            opening_balance=Decimal("10.00"),
+            opening_date=date(2026, 1, 3),
+        )
+        session.add(target)
+        session.flush()
+        target_id = target.id
+    current = service.get(token, transaction_id)
+    for change in (
+        {"category_id": str(resources[1]["expense"])},
+        {"category_id": str(own["income"])},
+        {"account_id": str(target_id)},
+        {"effective_date": "2026-01-01"},
+    ):
+        with pytest.raises(TransactionRejected):
+            service.update(
+                token, transaction_id, TransactionUpdateInput(**change), transaction_etag(current)
+            )
+    for model, record in ((Account, own["account"]), (Category, own["expense"])):
+        with database.sessions.begin() as session:
+            session.get(model, record).is_active = False
+        with pytest.raises(TransactionRejected):
+            service.update(
+                token,
+                transaction_id,
+                TransactionUpdateInput(description="No mutation"),
+                transaction_etag(current),
+            )
+        with database.sessions.begin() as session:
+            session.get(model, record).is_active = True
+    moved = service.update(
+        token,
+        transaction_id,
+        TransactionUpdateInput(
+            account_id=str(target_id),
+            category_id=str(own["income"]),
+            type="income",
+            effective_date="2026-01-05",
+            amount="0.10",
+        ),
+        transaction_etag(current),
+    )
+    assert moved.account_name == "Target" and moved.category_name == "Income"
+    assert service.balance(token, own["account"], date(2026, 1, 6)).balance == Decimal("1000.00")
+    assert service.balance(token, target_id, date(2026, 1, 4)).balance == Decimal("10.00")
+    assert service.balance(token, target_id, date(2026, 1, 5)).balance == Decimal("10.10")
+    planned_id = service.create(token, uuid4(), TransactionInput(**body(own, status="planned")))
+    planned = service.get(token, planned_id)
+    changed = service.update(
+        token, planned_id, TransactionUpdateInput(amount="300.00"), transaction_etag(planned)
+    )
+    assert changed.status == "planned"
+    assert service.balance(token, own["account"], date(2026, 1, 6)).balance == Decimal("1000.00")
+    with pytest.raises(TransactionStale):
+        service.post(token, planned_id, transaction_etag(planned))
+    with database.sessions.begin() as session:
+        job = ImportJob(
+            user_id=own["owner"],
+            account_id=own["account"],
+            filename="synthetic.csv",
+            file_checksum="b" * 64,
+        )
+        session.add(job)
+        session.flush()
+        imported = ImportRow(
+            user_id=own["owner"], account_id=own["account"], import_job_id=job.id, row_number=1
+        )
+        session.add(imported)
+        session.flush()
+        session.get(Transaction, planned_id).import_row_id = imported.id
+    with pytest.raises(TransactionRejected):
+        service.update(
+            token,
+            planned_id,
+            TransactionUpdateInput(notes="Cannot edit import"),
+            transaction_etag(changed),
+        )
+    assert service.get(token, planned_id) == changed
+
+
+def test_editing_concurrent_writers_do_not_overwrite_and_failures_roll_back(context, resources):
+    database, sessions, _, emails = context
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransactionService(sessions)
+    own = resources[0]
+    transaction_id = service.create(token, uuid4(), TransactionInput(**body(own)))
+    etag = transaction_etag(service.get(token, transaction_id))
+    barrier = Barrier(2)
+
+    def update(amount):
+        barrier.wait(timeout=10)
+        try:
+            return service.update(
+                token, transaction_id, TransactionUpdateInput(amount=amount), etag
+            )
+        except TransactionStale:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(update, amount) for amount in ("200.00", "250.00")]
+        results = [future.result(timeout=20) for future in futures]
+    assert sum(row is not None for row in results) == 1
+    current = service.get(token, transaction_id)
+    assert (
+        service.balance(token, own["account"], date(2026, 1, 4)).balance
+        == Decimal("1000.00") - current.amount
+    )
+
+    def fail(_session):
+        raise SQLAlchemyError("synthetic editing failure")
+
+    event.listen(database.sessions.class_, "before_commit", fail)
+    try:
+        with pytest.raises(SessionUnavailable):
+            service.update(
+                token,
+                transaction_id,
+                TransactionUpdateInput(amount="300.00"),
+                transaction_etag(current),
+            )
+    finally:
+        event.remove(database.sessions.class_, "before_commit", fail)
+    assert service.get(token, transaction_id) == current
+    sessions.revoke_by_access(token)
+    with pytest.raises(AuthenticationDenied):
+        service.update(
+            token, transaction_id, TransactionUpdateInput(notes="Denied"), transaction_etag(current)
+        )
+    with database.sessions() as session:
+        assert session.get(Transaction, transaction_id).amount == current.amount
