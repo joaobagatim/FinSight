@@ -103,6 +103,7 @@ def test_deletion_migration_preserves_money_and_refuses_to_revive_removed_rows(p
             command.upgrade(config, "head")
             command.check(config)
             command.downgrade(config, "base")
+            connection.exec_driver_sql("DROP TABLE alembic_version")
     finally:
         database.dispose()
 
