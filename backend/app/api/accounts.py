@@ -15,8 +15,9 @@ from app.schemas.accounts import (
     AccountInput,
     AccountListResponse,
     AccountResponse,
+    AccountUpdateInput,
 )
-from app.services.accounts import AccountService
+from app.services.accounts import AccountService, account_etag
 from app.services.session_types import AuthContext
 from app.services.sessions import SessionService
 
@@ -75,7 +76,30 @@ def list_accounts(
 @router.get("/{account_id}", response_model=AccountResponse)
 def get_account(
     account_id: UUID,
+    response: Response,
     token: Annotated[SecretStr, Depends(account_access)],
     service: Annotated[AccountService, Depends(account_service)],
 ):
-    return service.get(token, account_id)
+    result = service.get(token, account_id)
+    response.headers["ETag"] = account_etag(result)
+    return result
+
+
+@router.patch("/{account_id}", response_model=AccountResponse)
+def update_account(
+    account_id: UUID,
+    data: AccountUpdateInput,
+    response: Response,
+    expected_etag: Annotated[
+        str, Header(alias="If-Match", pattern=r'^"[0-9a-f]{64}"$', min_length=66, max_length=66)
+    ],
+    context: Annotated[SessionRequest, Depends(security)],
+    user: Annotated[AuthContext, Depends(get_current_user)],
+    service: Annotated[AccountService, Depends(account_service)],
+):
+    if context.binding() != user.session_id:
+        raise CsrfRejected()
+    context.verify(user.session_id)
+    result = service.update(context.values["access"], account_id, data, expected_etag)
+    response.headers["ETag"] = account_etag(result)
+    return result

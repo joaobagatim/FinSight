@@ -42,7 +42,10 @@ function apiUrl(path) {
   return base.origin + '/api/v1' + path
 }
 
-async function send(path, { method = 'GET', data, headers = {}, credentials = 'include' } = {}) {
+async function send(
+  path,
+  { method = 'GET', data, headers = {}, credentials = 'include', versioned = false } = {},
+) {
   let response
   try {
     response = await fetch(apiUrl(path), {
@@ -62,7 +65,11 @@ async function send(path, { method = 'GET', data, headers = {}, credentials = 'i
   if (!response.ok) throw new ApiError(response.status)
   if (response.status === 204) return undefined
   try {
-    return await response.json()
+    const data = await response.json()
+    if (!versioned) return data
+    const etag = response.headers.get('etag')
+    if (!/^"[0-9a-f]{64}"$/.test(etag || '')) throw new ApiError(0)
+    return { data, etag }
   } catch {
     throw new ApiError(0)
   }
@@ -113,6 +120,32 @@ async function authenticatedRead(path) {
 }
 
 export const api = {
+  account: (ownerId, id) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      return send(`/accounts/${encodeURIComponent(id)}`, { versioned: true })
+    }),
+  updateAccount: (ownerId, id, data, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () =>
+        send(`/accounts/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          data,
+          versioned: true,
+          headers: { 'If-Match': etag, 'X-CSRF-Token': await bootstrap() },
+        })
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
   accounts: (ownerId, offset = 0) =>
     coordinated(async () => {
       const profile = await renewUnlocked()

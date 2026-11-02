@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.accounts import AccountInput
+from app.schemas.accounts import AccountInput, AccountUpdateInput
 
 BODY = {
     "name": " Synthetic account ",
@@ -45,3 +45,23 @@ def test_account_input_rejects_unsafe_money_and_owner_selection():
     ):
         with pytest.raises(ValidationError):
             AccountInput(**(BODY | change))
+
+
+def test_account_update_accepts_only_explicit_metadata_changes():
+    assert AccountUpdateInput(is_active=False).model_dump(exclude_unset=True) == {
+        "is_active": False
+    }
+    assert AccountUpdateInput(name=" New name ").name == "New name"
+    for data in (
+        {},
+        {"name": None},
+        {"type": None},
+        {"is_active": None},
+        {"is_active": "false"},
+        {"opening_balance": "1.00"},
+        {"opening_date": "2026-01-02"},
+        {"user_id": "other"},
+        {"name": " "},
+    ):
+        with pytest.raises(ValidationError):
+            AccountUpdateInput(**data)

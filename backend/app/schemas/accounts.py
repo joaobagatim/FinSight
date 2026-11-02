@@ -6,7 +6,14 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from app.schemas.auth import RegistrationInput
 
@@ -51,6 +58,32 @@ class AccountInput(BaseModel):
     @field_serializer("opening_balance", when_used="json")
     def serialize_money(self, value: Decimal) -> str:
         return format(value, ".2f")
+
+
+class AccountUpdateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True, frozen=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    type: Literal["checking", "savings", "cash", "investment"] | None = None
+    is_active: bool | None = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def trim_name(cls, value):
+        return RegistrationInput.trim_identity(value)
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value):
+        return RegistrationInput.nonblank_name(value)
+
+    @model_validator(mode="after")
+    def nonempty_changes(self):
+        if not self.model_fields_set or any(
+            getattr(self, field) is None for field in self.model_fields_set
+        ):
+            raise ValueError("Provide non-null account changes")
+        return self
 
 
 class AccountResponse(BaseModel):

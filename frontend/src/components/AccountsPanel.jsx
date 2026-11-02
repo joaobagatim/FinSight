@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api, errorMessage } from '@/services/api'
 import { formatDate, formatMoney, parseMoney, today } from '@/lib/money'
+import EditAccountPanel from '@/components/EditAccountPanel'
 
 const types = {
   checking: 'Conta corrente',
@@ -22,6 +23,7 @@ export default function AccountsPanel({ ownerId, onExpired }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [editing, setEditing] = useState(null)
   const savingNow = useRef(false)
   const live = useRef(false)
   const generation = useRef(0)
@@ -192,6 +194,28 @@ export default function AccountsPanel({ ownerId, onExpired }) {
                   <dd>{formatDate(account.opening_date)}</dd>
                 </div>
               </dl>
+              <div className="account-actions">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={saving || Boolean(pending) || Boolean(editing)}
+                  onClick={() => setEditing({ id: account.id })}
+                >
+                  Editar
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={saving || Boolean(pending) || Boolean(editing)}
+                  onClick={() =>
+                    setEditing({ id: account.id, archive: true, active: !account.is_active })
+                  }
+                >
+                  {account.is_active ? 'Arquivar' : 'Reativar'}
+                </Button>
+              </div>
             </li>
           ))}
         </ul>
@@ -205,95 +229,114 @@ export default function AccountsPanel({ ownerId, onExpired }) {
           disponíveis em outra etapa.
         </p>
       </section>
-      <section className="surface account-form" aria-labelledby="account-form-heading">
-        <p className="eyebrow">Organize o presente</p>
-        <h2 id="account-form-heading">Nova conta</h2>
-        <p className="muted">Dê um nome e escolha a posição de abertura.</p>
-        {success && (
-          <p className="notice notice-success" role="status">
-            {success}
-          </p>
-        )}
-        <form
-          onSubmit={submit}
-          aria-label="Nova conta"
-          aria-describedby={error ? 'account-error' : undefined}
-        >
-          <fieldset disabled={saving || Boolean(pending)}>
-            <legend className="sr-only">Dados da conta</legend>
-            <label className="field" htmlFor="account-name">
-              Nome da conta
-              <input
-                id="account-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Ex.: Minha conta principal"
-                required
-              />
-            </label>
-            <div className="field">
-              <label htmlFor="account-type">Tipo de conta</label>
-              <select
-                id="account-type"
-                value={type}
-                onChange={(event) => setType(event.target.value)}
-              >
-                {Object.entries(types).map(([value, label]) => (
-                  <option value={value} key={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <label className="field" htmlFor="account-balance">
-              Saldo inicial (R$)
-              <input
-                id="account-balance"
-                inputMode="decimal"
-                value={balance}
-                onChange={(event) => setBalance(event.target.value)}
-                required
-                aria-describedby="balance-hint"
-              />
-            </label>
-            <p className="field-hint" id="balance-hint">
-              Use vírgula nos centavos, por exemplo: 1.234,56. O saldo pode ser negativo.
-            </p>
-            <label className="field" htmlFor="account-date">
-              Data de abertura
-              <input
-                id="account-date"
-                type="date"
-                value={date}
-                onChange={(event) => setDate(event.target.value)}
-                required
-                aria-describedby="date-hint"
-              />
-            </label>
-            <p className="field-hint" id="date-hint">
-              Informe a posição da conta ao final dessa data.
-            </p>
-            <Button type="submit" className="wide-button">
-              {saving ? 'Salvando…' : 'Cadastrar conta'}
-            </Button>
-          </fieldset>
-          {error && (
-            <p className="notice notice-error" id="account-error" role="alert">
-              {error}
+      {editing ? (
+        <EditAccountPanel
+          key={editing.id + String(editing.archive)}
+          ownerId={ownerId}
+          intent={editing}
+          onExpired={onExpired}
+          onCancel={() => {
+            setEditing(null)
+            void reload()
+          }}
+          onSaved={(message) => {
+            setEditing(null)
+            setSuccess(message)
+            void reload()
+          }}
+        />
+      ) : (
+        <section className="surface account-form" aria-labelledby="account-form-heading">
+          <p className="eyebrow">Organize o presente</p>
+          <h2 id="account-form-heading">Nova conta</h2>
+          <p className="muted">Dê um nome e escolha a posição de abertura.</p>
+          {success && (
+            <p className="notice notice-success" role="status">
+              {success}
             </p>
           )}
-        </form>
-        {pending && !saving && (
-          <div className="retry-account">
-            <p>
-              Não foi possível confirmar a resposta. Repita esta tentativa para conferir o cadastro.
-            </p>
-            <Button type="button" className="wide-button" onClick={() => persist(pending)}>
-              Tentar novamente
-            </Button>
-          </div>
-        )}
-      </section>
+          <form
+            onSubmit={submit}
+            aria-label="Nova conta"
+            aria-describedby={error ? 'account-error' : undefined}
+          >
+            <fieldset disabled={saving || Boolean(pending)}>
+              <legend className="sr-only">Dados da conta</legend>
+              <label className="field" htmlFor="account-name">
+                Nome da conta
+                <input
+                  id="account-name"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Ex.: Minha conta principal"
+                  required
+                />
+              </label>
+              <div className="field">
+                <label htmlFor="account-type">Tipo de conta</label>
+                <select
+                  id="account-type"
+                  value={type}
+                  onChange={(event) => setType(event.target.value)}
+                >
+                  {Object.entries(types).map(([value, label]) => (
+                    <option value={value} key={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <label className="field" htmlFor="account-balance">
+                Saldo inicial (R$)
+                <input
+                  id="account-balance"
+                  inputMode="decimal"
+                  value={balance}
+                  onChange={(event) => setBalance(event.target.value)}
+                  required
+                  aria-describedby="balance-hint"
+                />
+              </label>
+              <p className="field-hint" id="balance-hint">
+                Use vírgula nos centavos, por exemplo: 1.234,56. O saldo pode ser negativo.
+              </p>
+              <label className="field" htmlFor="account-date">
+                Data de abertura
+                <input
+                  id="account-date"
+                  type="date"
+                  value={date}
+                  onChange={(event) => setDate(event.target.value)}
+                  required
+                  aria-describedby="date-hint"
+                />
+              </label>
+              <p className="field-hint" id="date-hint">
+                Informe a posição da conta ao final dessa data.
+              </p>
+              <Button type="submit" className="wide-button">
+                {saving ? 'Salvando…' : 'Cadastrar conta'}
+              </Button>
+            </fieldset>
+            {error && (
+              <p className="notice notice-error" id="account-error" role="alert">
+                {error}
+              </p>
+            )}
+          </form>
+          {pending && !saving && (
+            <div className="retry-account">
+              <p>
+                Não foi possível confirmar a resposta. Repita esta tentativa para conferir o
+                cadastro.
+              </p>
+              <Button type="button" className="wide-button" onClick={() => persist(pending)}>
+                Tentar novamente
+              </Button>
+            </div>
+          )}
+        </section>
+      )}
     </div>
   )
 }

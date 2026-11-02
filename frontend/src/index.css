@@ -462,7 +462,17 @@ fieldset {
   list-style: none;
 }
 .account-card {
+  overflow-wrap: anywhere;
   padding: 24px;
+}
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.account-form > button {
+  margin-top: 0.75rem;
 }
 .account-card h3 {
   font-size: 18px;

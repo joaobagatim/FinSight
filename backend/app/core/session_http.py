@@ -95,7 +95,7 @@ class SessionHttpMiddleware:
         for key, _ in scope["headers"]:
             key = key.lower()
             if key in _SINGLE_HEADERS or (
-                key == b"idempotency-key" and is_account_path(scope["path"])
+                key in {b"idempotency-key", b"if-match"} and is_account_path(scope["path"])
             ):
                 if key in seen:
                     await reject(403, "Authentication request rejected")
@@ -111,7 +111,8 @@ class SessionHttpMiddleware:
             await reject(429, "Authentication limit reached", retry)
             return
         if scope["method"] != "POST" and not (
-            scope["path"] == PROFILE_PATH and scope["method"] == "PATCH"
+            (scope["path"] == PROFILE_PATH or is_account_path(scope["path"]))
+            and scope["method"] == "PATCH"
         ):
             await self.app(scope, receive, no_store)
             return
@@ -124,8 +125,8 @@ class SessionHttpMiddleware:
             return
         bound = (
             self.settings.auth_login_body_bytes
-            if scope["path"]
-            in {"/api/v1/auth/login", PASSWORD_CHANGE_PATH, PROFILE_PATH, ACCOUNTS_PATH}
+            if scope["path"] in {"/api/v1/auth/login", PASSWORD_CHANGE_PATH, PROFILE_PATH}
+            or is_account_path(scope["path"])
             else self.settings.auth_body_bytes
         )
         body = bytearray()
@@ -179,8 +180,9 @@ class SessionCorsMiddleware:
             app,
             allow_origins=[str(origin).rstrip("/") for origin in settings.auth_allowed_origins],
             allow_credentials=True,
-            allow_methods=["GET", "POST"],
-            allow_headers=["Accept", "Content-Type", "X-CSRF-Token", "Idempotency-Key"],
+            allow_methods=["GET", "POST", "PATCH"],
+            allow_headers=["Accept", "Content-Type", "X-CSRF-Token", "Idempotency-Key", "If-Match"],
+            expose_headers=["ETag"],
         )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -204,7 +206,7 @@ class SessionCorsMiddleware:
             for key, _ in scope["headers"]:
                 key = key.lower()
                 if key in _SINGLE_HEADERS or (
-                    key == b"idempotency-key" and is_account_path(scope["path"])
+                    key in {b"idempotency-key", b"if-match"} and is_account_path(scope["path"])
                 ):
                     if key in seen:
                         await JSONResponse(

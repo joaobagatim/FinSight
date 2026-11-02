@@ -1083,6 +1083,31 @@ criar outra conta. Retenção e exclusão dessas chaves precisam de política pr
 não há expurgo automático nesta etapa. Não aplique rollback em um banco em uso
 sem avaliação e autorização específicas.
 
+## Edição e arquivamento de contas pela API
+
+`GET /api/v1/accounts/{id}` fornece um cabeçalho `ETag`. Para editar, envie
+`PATCH /api/v1/accounts/{id}` com esse valor em `If-Match`, cookies de sessão,
+origem autorizada e `X-CSRF-Token`. O corpo JSON aceita apenas `name`, `type`
+e `is_active`; envie pelo menos um campo, sem valores nulos. Saldo inicial,
+data de abertura, moeda e proprietário não podem ser alterados por essa rota.
+
+Uma edição bem-sucedida retorna 200 com a conta e seu novo `ETag`. Se os dados
+mudaram desde a consulta, retorna 412: consulte novamente e revise sua edição
+antes de tentar salvar. Cabeçalhos `If-Match` ausentes ou inválidos retornam 422.
+O controle compara a representação atual da conta dentro da transação bloqueada.
+
+Use `{"is_active":false}` para arquivar e `{"is_active":true}` para reativar.
+Arquivar preserva a conta, o saldo inicial e os registros financeiros relacionados;
+não há exclusão de histórico. Contas de outra pessoa e inexistentes retornam o
+mesmo 404. Respostas usam `no-store`; o CORS das contas permite PATCH/If-Match
+e expõe ETag para a origem autorizada. Não há nova migration ou dependência.
+A interface autenticada também oferece edição, arquivamento e reativação.
+Arquivar exige confirmação e mantém a conta na lista com a indicação de arquivada.
+O formulário consulta os dados atuais antes de permitir salvar. Se houver conflito,
+preserva o rascunho, bloqueia o envio e pede para recarregar e revisar os dados.
+Se uma resposta se perder, também exige consultar o estado antes de nova tentativa;
+não repete silenciosamente a alteração. Recarregar substitui o rascunho local.
+
 ## Cadastrar, listar e consultar contas próprias
 
 A primeira entrega da Fase 2 implementa RF-010/RF-013:
@@ -1230,5 +1255,6 @@ Nos testes autenticados, `VITE_API_BASE_URL` aponta apenas para a API descartáv
 Os testes de navegador cobrem o fluxo de acesso, contas em tela estreita,
 separação entre usuários, repetição após resposta perdida, renovação em duas abas
 e limpeza após logout. Localmente são selecionados novos/afetados; o CI executa
-o conjunto completo. Não há nova dependência, edição/arquivamento de contas,
-categorias, lançamentos, dashboard ou mudança de schema nesta entrega de interface.
+o conjunto completo. A edição e o arquivamento também têm cenários de duas abas,
+conflito de edição e resposta perdida. Não há nova dependência, categorias,
+lançamentos, dashboard ou mudança de schema nesta entrega de interface.
