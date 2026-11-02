@@ -325,6 +325,10 @@ chave composta proprietário/id em `transactions` para proteger a repetição de
 lançamentos manuais. `0010_transaction_deletion` acrescenta `transactions.deleted_at`
 para exclusão lógica, sem marcar ou excluir registros existentes. Nenhum dado
 financeiro é criado pelas migrations.
+
+`0011_transfer_requests` acrescenta a tabela técnica `transfer_creation_requests`
+e a chave composta proprietário/id em `transfers`, preservando transferências
+existentes. O schema atual tem quinze tabelas físicas, incluindo `alembic_version`.
 O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
 domínio estão modeladas; autenticação HTTP e cadastro/consulta de contas próprias
 estão disponíveis. Os demais recursos financeiros ainda serão implementados.
@@ -354,10 +358,11 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0010_transaction_deletion` e as quatorze tabelas `alembic_version`, `users`,
+`0011_transfer_requests` e as quinze tabelas `alembic_version`, `users`,
 `user_sessions`, `accounts`, `categories`, `import_jobs`, `import_rows`,
 `transactions`, `transfers`, `financial_goals`, `goal_allocations` e
-`refresh_token_history`, `account_creation_requests` e `transaction_creation_requests`.
+`refresh_token_history`, `account_creation_requests`, `transaction_creation_requests`
+e `transfer_creation_requests`.
 Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
 são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
@@ -1079,7 +1084,7 @@ SELECT count(*) AS persisted_creation_requests
 FROM public.account_creation_requests;
 ```
 
-Resultado esperado em um banco recém-migrado: revisão `0010_transaction_deletion`,
+Resultado esperado em um banco recém-migrado: revisão `0011_transfer_requests`,
 cinco colunas não nulas, chave primária composta, duas chaves estrangeiras,
 verificações de digest/UUIDv4 e zero registros. Nenhuma conta, usuário ou chave é
 criada automaticamente. A API continua sem executar migrations no startup.
@@ -1152,7 +1157,8 @@ Contas/categorias arquivadas continuam compondo seu histórico.
 
 Exemplo: abertura de1000,00 menos uma despesa efetivada de150,00 resulta em850,00.
 Planejar outra despesa de200,00 mantém o saldo real em850,00. Projeções de saldo,
-saldo consolidado, reservas e a API de criação de transferências ficam para depois.
+saldo consolidado e reservas ficam para depois. A criação de transferências está
+disponível na API e interface descritas na seção específica abaixo.
 O cálculo já considera transferências persistidas pelo modelo, sem criá-las.
 
 Referências inválidas/incompatíveis/inativas ou datas proibidas retornam422
@@ -1207,10 +1213,10 @@ de acesso limpa a intenção em memória: consulte o histórico antes de começa
 Nada desse estado é gravado em localStorage/sessionStorage; cookies e CSRF seguem
 o controle de sessão existente.
 
-O banco de destino precisa estar na revisão `0010_transaction_deletion` para os fluxos atuais de
+O banco de destino precisa incluir a revisão `0010_transaction_deletion` para os fluxos atuais de
 lançamentos com segurança. A interface e o startup não aplicam a migration ao banco
 pessoal. A exclusão acrescenta a migration `0010_transaction_deletion`; não há
-nova dependência. A criação de transferências continua pendente.
+nova dependência. Transferências usam a migração0011 e a área descrita abaixo.
 
 ### Editar um lançamento manual
 
@@ -1298,7 +1304,7 @@ SELECT count(*) FILTER (WHERE deleted_at IS NULL) AS active_movements,
 FROM public.transactions;
 ```
 
-Espere revisão `0010_transaction_deletion`, coluna `deleted_at` nullable, sem
+Espere revisão `0010_transaction_deletion` ou posterior, coluna `deleted_at` nullable, sem
 default e do tipo `timestamp with time zone`. Logo após migrar, o número de
 excluídos retidos é zero; o número de ativos corresponde às linhas existentes.
 Os totais refletem o banco consultado, sem listar descrições ou valores.
@@ -1308,6 +1314,105 @@ qualquer marca de exclusão, para impedir que valores excluídos retornem ao sal
 Não limpe essas marcas para contornar a proteção. Sem exclusões retidas, o
 downgrade remove somente a coluna e preserva dados financeiros. Não aplique
 rollback automaticamente a um banco em uso.
+
+## Transferências entre contas próprias
+
+Na área **Transferências**, selecione origem e destino distintos, valor positivo
+em BRL, data e situação explícita. As duas contas precisam estar ativas e a data
+deve ser posterior à abertura de ambas. A abertura representa a posição ao fim
+do dia. A descrição é opcional, com até 255 caracteres. Valores são enviados
+como strings decimais; o servidor usa Decimal/NUMERIC.
+
+Uma transferência efetivada é uma única linha: sai da origem e entra no destino
+na mesma data. Os saldos são derivados dessa linha, sem gerar receita/despesa
+ou alterar saldos acumulados. A soma das duas contas permanece igual. Uma
+transferência planejada fica fora do saldo real; não há efetivação automática.
+Este cadastro registra uma movimentação no FinSight, sem enviar dinheiro a bancos.
+
+O histórico mostra nomes das contas, valor, data e situação, com paginação.
+Consulte o saldo de cada conta na data desejada. Edição, exclusão e efetivação
+de transferências planejadas ainda são fluxos separados; não estão disponíveis
+nesta entrega. Contas arquivadas preservam o histórico existente.
+
+### Contrato e repetição segura
+
+`POST /api/v1/transfers` exige sessão viva, origem autorizada, CSRF e
+`Idempotency-Key` UUIDv4 canônica. Corpo JSON:
+
+```json
+{
+  "from_account_id": "10000000-0000-4000-8000-000000000001",
+  "to_account_id": "10000000-0000-4000-8000-000000000002",
+  "amount": "500.00",
+  "status": "posted",
+  "effective_date": "2026-01-04",
+  "description": "Movimentação entre contas próprias"
+}
+```
+
+Os IDs acima são fictícios; utilize IDs das suas contas. O cliente não define
+proprietário. A resposta 201 contém apenas `id`, com `Location` do recurso.
+Usuário/sessão e contas são bloqueados na transação; ambas as referências são
+validadas como próprias, ativas e BRL. Transferência e memória da chave são
+gravadas atomicamente. Se o commit falhar, nenhuma das contas é afetada.
+
+Repetir a mesma chave e os mesmos dados normalizados retorna o ID original sem
+nova transferência, mesmo se uma conta foi arquivada depois. A mesma chave com
+outros dados retorna 409. Usuários e tipos de recurso têm espaços de chave
+separados. Nunca descarte a chave para repetir um pedido de resultado incerto.
+
+Na interface, chave e dados ficam em memória desde antes do envio, preservados
+na navegação e após erro em uma repetição. A ação **Conferir e repetir
+transferência** conserva ambos. Encerrar uma intenção não cancela uma operação
+já salva. Sair, expirar a sessão, mudar de acesso ou recarregar limpa a intenção;
+confira o histórico antes de iniciar outra. Não há storage de pedidos ou tokens.
+O saldo anterior é ocultado ao tentar cadastrar e após confirmar o resultado.
+
+`GET /api/v1/transfers/{id}` permite apenas recursos próprios; alheio e inexistente
+retornam o mesmo 404. `GET /api/v1/transfers` usa `limit` padrão 50/máximo 100,
+`offset` e `has_more`, ordenando por data, criação e UUID decrescentes. A API
+aceita `account_id` (origem ou destino), `status`, `date_from` e `date_to`
+inclusivos. Intervalo invertido é inválido. A lista também é delimitada ao usuário.
+Campos extras, contas/datas inválidas ou chave ausente/inválida retornam 422;
+CSRF/origem inválidos retornam 403, limite 429 e indisponibilidade 503. Corpos
+JSON são limitados; respostas usam `no-store` e não ecoam entradas financeiras.
+
+### Migração 0011 e DBeaver
+
+`0011_transfer_requests`, filha de `0010_transaction_deletion`, cria
+`transfer_creation_requests` com usuário/chave como PK, digest SHA-256, ID da
+transferência e instante UTC. A FK composta garante proprietário e transferência
+compatíveis, com RESTRICT. A unicidade proprietário/id é acrescentada à tabela
+`transfers`; nenhuma linha financeira existente é modificada. Há quinze tabelas
+físicas incluindo o controle do Alembic.
+
+O banco de destino precisa de 0011 para as rotas de transferência. Startup e
+interface não aplicam migrations; esta entrega valida somente em PostgreSQL
+descartável, sem aplicação ao banco pessoal. Consultas somente de leitura:
+
+```sql
+SELECT version_num FROM public.alembic_version;
+
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'transfer_creation_requests'
+ORDER BY ordinal_position;
+
+SELECT conname, pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conrelid = 'public.transfer_creation_requests'::regclass
+ORDER BY conname;
+
+SELECT count(*) AS retained_transfer_creation_requests
+FROM public.transfer_creation_requests;
+```
+
+Em um banco recém-migrado, espere revisão0011, cinco colunas não nulas, PK
+composta, FKs de usuário/transferência própria, checks de digest/UUIDv4 e zero
+chaves criadas automaticamente. Não há credenciais ou corpo JSON nessa tabela.
+O downgrade bloqueia e recusa remover uma memória de criação não vazia, evitando
+duplicação por perda de idempotência. Não apague chaves para contornar o guard;
+retenção/expurgo e exclusão de transferências precisam de desenho específico.
 
 ### Efetivar um lançamento planejado
 
