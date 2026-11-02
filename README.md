@@ -322,7 +322,9 @@ a chave composta de proprietário/id/tipo em categorias;
 persistir tentativas de criação de contas por usuário/chave;
 `0009_transaction_requests` acrescenta `transaction_creation_requests` e uma
 chave composta proprietário/id em `transactions` para proteger a repetição de
-lançamentos manuais. Nenhum dado financeiro é criado pela migration.
+lançamentos manuais. `0010_transaction_deletion` acrescenta `transactions.deleted_at`
+para exclusão lógica, sem marcar ou excluir registros existentes. Nenhum dado
+financeiro é criado pelas migrations.
 O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
 domínio estão modeladas; autenticação HTTP e cadastro/consulta de contas próprias
 estão disponíveis. Os demais recursos financeiros ainda serão implementados.
@@ -352,7 +354,7 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0009_transaction_requests` e as quatorze tabelas `alembic_version`, `users`,
+`0010_transaction_deletion` e as quatorze tabelas `alembic_version`, `users`,
 `user_sessions`, `accounts`, `categories`, `import_jobs`, `import_rows`,
 `transactions`, `transfers`, `financial_goals`, `goal_allocations` e
 `refresh_token_history`, `account_creation_requests` e `transaction_creation_requests`.
@@ -1077,7 +1079,7 @@ SELECT count(*) AS persisted_creation_requests
 FROM public.account_creation_requests;
 ```
 
-Resultado esperado em um banco recém-migrado: revisão `0009_transaction_requests`,
+Resultado esperado em um banco recém-migrado: revisão `0010_transaction_deletion`,
 cinco colunas não nulas, chave primária composta, duas chaves estrangeiras,
 verificações de digest/UUIDv4 e zero registros. Nenhuma conta, usuário ou chave é
 criada automaticamente. A API continua sem executar migrations no startup.
@@ -1205,10 +1207,10 @@ de acesso limpa a intenção em memória: consulte o histórico antes de começa
 Nada desse estado é gravado em localStorage/sessionStorage; cookies e CSRF seguem
 o controle de sessão existente.
 
-O banco de destino precisa estar na revisão `0009_transaction_requests` para criar
+O banco de destino precisa estar na revisão `0010_transaction_deletion` para os fluxos atuais de
 lançamentos com segurança. A interface e o startup não aplicam a migration ao banco
-pessoal. Não há nova migration ou dependência para a interface, edição ou
-efetivação de lançamentos. Exclusão e criação de transferências continuam pendentes.
+pessoal. A exclusão acrescenta a migration `0010_transaction_deletion`; não há
+nova dependência. A criação de transferências continua pendente.
 
 ### Editar um lançamento manual
 
@@ -1231,7 +1233,7 @@ Lançamentos vinculados à importação não são editados por este fluxo manual
 Saldos são derivados: mudar valor, tipo, conta ou data de um efetivado recalcula
 as posições nas contas e datas envolvidas, sem outra linha financeira. O digest
 da criação permanece intacto; repetir a chave e o corpo originais retorna o mesmo
-ID sem restaurar dados antigos. Não há endpoint DELETE nesta entrega.
+ID sem restaurar dados antigos. Se já foi excluído, o replay retorna 410 sem recriar.
 
 A interface bloqueia ações paralelas de cadastro/edição/efetivação. Em resposta
 incerta ou conflito, consulte **Recarregar situação**: a consulta substitui o
@@ -1240,6 +1242,72 @@ salvos, a tela reconhece o resultado; caso contrário exige nova revisão e aç�
 explícita. Isso não constitui comprovante de autoria de uma edição. O histórico
 é recarregado desde a primeira página para preservar a ordem após mudar datas,
 e o saldo anterior é ocultado até nova consulta. Não há rascunhos em storage.
+
+### Excluir um lançamento manual
+
+Use **Excluir** no histórico para consultar os dados atuais e confirme em
+**Confirmar exclusão**. Cancelar fecha o painel sem enviar o pedido. O movimento
+sai das listagens e do cálculo de saldo; excluir um planejado não modifica o
+saldo real. Contas ou categorias arquivadas não impedem corrigir o histórico
+pela exclusão de um lançamento manual. Não há restauração pela interface/API.
+
+Na API, `DELETE /api/v1/transactions/{id}` exige corpo JSON `{}`, sessão viva,
+origem autorizada, CSRF e `If-Match` da consulta individual. Retorna 204 sem
+corpo; um registro ativo com snapshot divergente retorna 412 e precisa ser
+consultado e confirmado novamente. Repetir a exclusão de um registro próprio
+já excluído retorna 204, com sessão/CSRF e formato de If-Match ainda obrigatórios,
+sem outro efeito financeiro. Recurso alheio ou inexistente retorna o mesmo 404.
+Corpo extra/headers inválidos retornam 422; o JSON é limitado e usa `no-store`.
+Lançamentos vinculados à importação não podem ser excluídos por este fluxo.
+
+Após excluir, GET, PATCH, efetivação e replay da chave/corpo originais de criação
+retornam 410 para o proprietário. Uma chave com corpo divergente continua 409.
+Nenhuma dessas operações restaura o movimento ou altera seu status/valor/data.
+Em resposta incerta, a tela bloqueia outra exclusão até **Recarregar situação**:
+um GET 410 reconhece o registro excluído sem outro DELETE. O histórico reinicia
+a paginação e o saldo anterior é ocultado para nova consulta.
+
+A exclusão é lógica: o registro completo, suas referências e chaves de criação
+permanecem internamente para preservar integridade e impedir recriação por retry.
+Isso inclui textos e valores financeiros. Não há expurgo automático nem exclusão
+definitiva de dados pessoais nesta entrega; política de retenção e fluxo de
+apagamento precisam ser definidos antes da produção. A marca não é exposta
+como campo editável. Não remova chaves nem referências para apagar fisicamente
+esses registros sem um desenho específico de retenção/idempotência.
+
+#### Migração e conferência no DBeaver
+
+A migration `0010_transaction_deletion`, filha de `0009_transaction_requests`,
+adiciona uma coluna nullable `timestamp with time zone`, com NULL nos registros
+existentes. Não cria tabelas ou dados. Startup não aplica migrations. A aplicação
+ao banco pessoal continua sendo uma operação separada; esta entrega a valida
+somente em PostgreSQL descartável com dados sintéticos.
+
+Consultas somente de leitura para conferir um banco já migrado:
+
+```sql
+SELECT version_num FROM public.alembic_version;
+
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'transactions'
+  AND column_name = 'deleted_at';
+
+SELECT count(*) FILTER (WHERE deleted_at IS NULL) AS active_movements,
+       count(*) FILTER (WHERE deleted_at IS NOT NULL) AS retained_deleted_movements
+FROM public.transactions;
+```
+
+Espere revisão `0010_transaction_deletion`, coluna `deleted_at` nullable, sem
+default e do tipo `timestamp with time zone`. Logo após migrar, o número de
+excluídos retidos é zero; o número de ativos corresponde às linhas existentes.
+Os totais refletem o banco consultado, sem listar descrições ou valores.
+
+O downgrade para 0009 bloqueia escritas na tabela e recusa a operação quando há
+qualquer marca de exclusão, para impedir que valores excluídos retornem ao saldo.
+Não limpe essas marcas para contornar a proteção. Sem exclusões retidas, o
+downgrade remove somente a coluna e preserva dados financeiros. Não aplique
+rollback automaticamente a um banco em uso.
 
 ### Efetivar um lançamento planejado
 

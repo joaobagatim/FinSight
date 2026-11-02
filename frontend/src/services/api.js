@@ -129,6 +129,27 @@ export const api = {
         throw new ApiError(0)
       return result
     }),
+  deleteTransaction: (ownerId, id, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const remove = async () => {
+        const csrf = await bootstrap()
+        return send(`/transactions/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          data: {},
+          headers: { 'If-Match': etag, 'X-CSRF-Token': csrf },
+        })
+      }
+      try {
+        return await remove()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return remove()
+      }
+    }),
   updateTransaction: (ownerId, id, data, etag) =>
     coordinated(async () => {
       const profile = await renewUnlocked()
@@ -318,6 +339,8 @@ export const api = {
 }
 
 export function errorMessage(error, fallback) {
+  if (error.status === 410)
+    return 'Este lançamento foi excluído. Atualize o histórico para conferir.'
   if (error.status === 429) return 'Muitas tentativas. Espere um pouco e tente novamente.'
   if (error.status === 0 || error.status >= 500)
     return 'Não conseguimos acessar o serviço. Tente novamente em instantes.'

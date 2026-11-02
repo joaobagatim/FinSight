@@ -4,6 +4,7 @@ import { api, errorMessage } from '@/services/api'
 import { formatDate, formatMoney } from '@/lib/money'
 import PostTransactionPanel from '@/components/PostTransactionPanel'
 import EditTransactionPanel from '@/components/EditTransactionPanel'
+import DeleteTransactionPanel from '@/components/DeleteTransactionPanel'
 
 export default function TransactionHistory({
   ownerId,
@@ -18,8 +19,9 @@ export default function TransactionHistory({
   const [error, setError] = useState('')
   const [postingId, setPostingId] = useState(null)
   const [editingId, setEditingId] = useState(null)
+  const [deletingId, setDeletingId] = useState(null)
   const [refresh, setRefresh] = useState(0)
-  const actionOpen = Boolean(postingId || editingId)
+  const actionOpen = Boolean(postingId || editingId || deletingId)
   const heading = useRef(null)
   const resolved = useCallback(
     (item) => {
@@ -44,9 +46,21 @@ export default function TransactionHistory({
     [resolved],
   )
 
+  const removed = useCallback(
+    (id) => {
+      setPage((previous) => ({ ...previous, items: previous.items.filter((row) => row.id !== id) }))
+      onBalanceChanged()
+      setLoading(true)
+      setError('')
+      setRefresh((value) => value + 1)
+    },
+    [onBalanceChanged],
+  )
+
   function closeAction() {
     setPostingId(null)
     setEditingId(null)
+    setDeletingId(null)
     onActionChange(false)
     heading.current?.focus()
   }
@@ -150,6 +164,18 @@ export default function TransactionHistory({
           onClose={closeAction}
         />
       )}
+      {deletingId && (
+        <DeleteTransactionPanel
+          key={deletingId}
+          ownerId={ownerId}
+          transactionId={deletingId}
+          disabled={disabled}
+          onExpired={onExpired}
+          onRemoved={removed}
+          onAttempt={onBalanceChanged}
+          onClose={closeAction}
+        />
+      )}
       <ul className="account-cards" aria-label="Lançamentos cadastrados">
         {page.items.map((item) => (
           <li key={item.id} className="surface account-card">
@@ -203,6 +229,18 @@ export default function TransactionHistory({
                   Efetivar
                 </Button>
               )}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={loading || disabled || actionOpen}
+                onClick={() => {
+                  setDeletingId(item.id)
+                  onActionChange(true)
+                }}
+              >
+                Excluir
+              </Button>
             </div>
             {item.notes && (
               <details className="movement-notes">
@@ -225,7 +263,7 @@ export default function TransactionHistory({
       )}
       <p className="field-hint">
         Planejados não alteram o saldo real até você confirmar sua efetivação. A edição mantém a
-        situação atual. Exclusão estará disponível em outra etapa.
+        situação atual. A exclusão exige confirmação e retira o movimento do saldo.
       </p>
     </section>
   )
