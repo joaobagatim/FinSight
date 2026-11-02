@@ -29,8 +29,12 @@ def is_category_path(path: str) -> bool:
     return path == "/api/v1/categories" or path.startswith("/api/v1/categories/")
 
 
+def is_transaction_path(path: str) -> bool:
+    return path == "/api/v1/transactions" or path.startswith("/api/v1/transactions/")
+
+
 def is_financial_path(path: str) -> bool:
-    return is_account_path(path) or is_category_path(path)
+    return is_account_path(path) or is_category_path(path) or is_transaction_path(path)
 
 
 def is_session_path(path: str) -> bool:

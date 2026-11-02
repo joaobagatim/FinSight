@@ -3,13 +3,12 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import SecretStr
 
-from app.api.dependencies import get_current_user, get_session_service
-from app.api.session_auth import SessionRequest, security
-from app.core.auth_cookies import AuthCookies
-from app.core.csrf import CsrfRejected
+from app.api.dependencies import get_session_service
+from app.api.financial_auth import financial_access as category_access
+from app.api.financial_auth import financial_mutation as category_mutation
 from app.schemas.categories import (
     CategoryInput,
     CategoryListResponse,
@@ -17,7 +16,6 @@ from app.schemas.categories import (
     CategoryUpdateInput,
 )
 from app.services.categories import CategoryService, category_etag
-from app.services.session_types import AuthContext
 from app.services.sessions import SessionService
 
 router = APIRouter(prefix="/api/v1/categories", tags=["categories"])
@@ -25,20 +23,6 @@ router = APIRouter(prefix="/api/v1/categories", tags=["categories"])
 
 def category_service(sessions: Annotated[SessionService, Depends(get_session_service)]):
     return CategoryService(sessions)
-
-
-def category_access(request: Request, _user: Annotated[AuthContext, Depends(get_current_user)]):
-    return AuthCookies(request.app.state.settings, request).read()["access"]
-
-
-def category_mutation(
-    context: Annotated[SessionRequest, Depends(security)],
-    user: Annotated[AuthContext, Depends(get_current_user)],
-) -> SecretStr:
-    if context.binding() != user.session_id:
-        raise CsrfRejected()
-    context.verify(user.session_id)
-    return context.values["access"]
 
 
 @router.post("", status_code=201, response_model=CategoryResponse)

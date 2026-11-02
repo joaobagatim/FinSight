@@ -4,7 +4,12 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.core.session_http import is_account_path, is_category_path, is_session_path
+from app.core.session_http import (
+    is_account_path,
+    is_category_path,
+    is_session_path,
+    is_transaction_path,
+)
 
 REGISTRATION_PATH = "/api/v1/auth/register"
 
@@ -21,6 +26,8 @@ async def registration_validation_error(request: Request, error: RequestValidati
                 if is_account_path(request.url.path)
                 else "Invalid category data"
                 if is_category_path(request.url.path)
+                else "Invalid transaction data"
+                if is_transaction_path(request.url.path)
                 else "Invalid authentication data"
             },
             headers={"Cache-Control": "no-store"},
