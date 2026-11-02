@@ -124,7 +124,10 @@ class SessionHttpMiddleware:
             return
         if scope["method"] != "POST" and not (
             (scope["path"] == PROFILE_PATH or is_financial_path(scope["path"]))
-            and scope["method"] == "PATCH"
+            and (
+                scope["method"] == "PATCH"
+                or (is_transaction_path(scope["path"]) and scope["method"] == "DELETE")
+            )
         ):
             await self.app(scope, receive, no_store)
             return
@@ -192,7 +195,7 @@ class SessionCorsMiddleware:
             app,
             allow_origins=[str(origin).rstrip("/") for origin in settings.auth_allowed_origins],
             allow_credentials=True,
-            allow_methods=["GET", "POST", "PATCH"],
+            allow_methods=["GET", "POST", "PATCH", "DELETE"],
             allow_headers=["Accept", "Content-Type", "X-CSRF-Token", "Idempotency-Key", "If-Match"],
             expose_headers=["ETag"],
         )

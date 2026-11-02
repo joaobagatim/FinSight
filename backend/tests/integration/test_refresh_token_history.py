@@ -283,9 +283,17 @@ def test_upgrade_existing_data_and_downgrade_preserve_all_ten_domain_tables(conn
         "goal_allocations",
     )
 
+    # Compare every original financial field; later nullable metadata is additive.
+    original_columns = {
+        table: ", ".join(column["name"] for column in inspect(connection).get_columns(table))
+        for table in tables
+    }
+
     def snapshot():
         return {
-            table: connection.execute(text(f"SELECT * FROM {table} ORDER BY id")).all()
+            table: connection.execute(
+                text(f"SELECT {original_columns[table]} FROM {table} ORDER BY id")
+            ).all()
             for table in tables
         }
 
@@ -293,6 +301,10 @@ def test_upgrade_existing_data_and_downgrade_preserve_all_ten_domain_tables(conn
     assert all(before.values())
     command.upgrade(config, "head")
     command.upgrade(config, "head")
+    assert (
+        connection.scalar(text("SELECT count(*) FROM transactions WHERE deleted_at IS NOT NULL"))
+        == 0
+    )
     assert connection.scalar(select(text("count(*)")).select_from(RefreshTokenHistory)) == 0
     assert before == snapshot()
     add(connection, RefreshTokenHistory, session_id=auth, token_hash="b" * 64)

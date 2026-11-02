@@ -42,6 +42,7 @@ from app.services.transactions import (
     TransactionConflict,
     TransactionNotFound,
     TransactionRejected,
+    TransactionRemoved,
     TransactionStale,
 )
 
@@ -145,6 +146,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             {"detail": "Transaction changed; reload before updating"}, status_code=412
         )
+
+    @application.exception_handler(TransactionRemoved)
+    async def transaction_removed(_request, _error):
+        return JSONResponse({"detail": "Transaction removed"}, status_code=410)
 
     @application.exception_handler(Exception)
     async def unexpected_error(request, _error):
