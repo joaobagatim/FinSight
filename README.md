@@ -1083,6 +1083,51 @@ criar outra conta. Retenção e exclusão dessas chaves precisam de política pr
 não há expurgo automático nesta etapa. Não aplique rollback em um banco em uso
 sem avaliação e autorização específicas.
 
+## Categorias próprias pela API
+
+`POST /api/v1/categories` cria uma categoria de receita (`income`) ou despesa
+(`expense`). Envie `name` com até 100 caracteres e `type`; `color` é opcional
+no formato `#RRGGBB`, e `icon` é um identificador opcional com até 50 caracteres,
+iniciado por letra minúscula e seguido de letras minúsculas, números ou hífen.
+Não envie HTML, URLs ou `user_id`.
+
+`GET /api/v1/categories` retorna `items`, `limit`, `offset` e `has_more`, com
+paginação padrão50/máximo100 e filtro opcional `type=income` ou `type=expense`.
+Inclui ativas e desativadas, sempre somente do usuário autenticado.
+`GET /api/v1/categories/{id}` consulta uma categoria e retorna `ETag`.
+
+`PATCH /api/v1/categories/{id}` exige esse ETag em `If-Match` e aceita nome,
+cor, ícone ou `is_active`. Cor e ícone podem ser removidos enviando `null`;
+nome e estado não aceitam `null`. O tipo permanece imutável para preservar
+a compatibilidade com lançamentos existentes. Desativar não exclui histórico;
+reative com `{"is_active":true}`. Não há endpoint DELETE.
+
+Criação/edição exigem sessão, origem autorizada e CSRF. POST retorna201 com a
+categoria, Location e ETag; PATCH retorna200 e ETag. Nome normalizado duplicado
+por usuário/tipo retorna409, inclusive se a categoria existente estiver desativada.
+Uma edição desatualizada retorna412; outra pessoa/inexistente retorna o mesmo404.
+Respostas não ecoam entradas inválidas e usam `no-store`; corpos JSON são limitados
+e o CORS expõe ETag apenas às origens autorizadas. A unicidade é garantida pelo
+índice existente no PostgreSQL. Nenhuma nova migration ou dependência é necessária.
+
+O cadastro de categoria não usa chave de idempotência. Após resposta ambígua,
+consulte a lista antes de cadastrar novamente; a API não repete a mutação.
+Nomes iguais são permitidos para tipos ou proprietários diferentes. Não são
+criadas categorias padrão automaticamente nesta entrega.
+
+Na área autenticada, abra **Categorias** para cadastrar classificações de receitas
+ou despesas. A lista inclui as categorias desativadas, com identificação explícita.
+Use **Editar** para renomear; o tipo fica protegido. **Desativar/Reativar** abre
+uma confirmação que explica a preservação do histórico.
+
+Se outra aba alterar a categoria, a tela mantém seu rascunho e pede para recarregar
+os dados antes de salvar. Essa recarga substitui o rascunho. Após resposta ambígua
+no cadastro, **Conferir categorias** atualiza a lista sem reenviar o POST; confira
+o resultado antes de começar outra tentativa. O formulário fica bloqueado até
+essa consulta terminar com sucesso. Navegar para outra área descarta o rascunho
+mantido somente em memória. Cor e ícone são opcionais pela API, ainda sem seletores
+nessa interface. Não há receitas, despesas ou cálculos de saldo nesta entrega.
+
 ## Edição e arquivamento de contas pela API
 
 `GET /api/v1/accounts/{id}` fornece um cabeçalho `ETag`. Para editar, envie

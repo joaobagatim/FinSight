@@ -471,6 +471,9 @@ fieldset {
   gap: 0.5rem;
   margin-top: 1rem;
 }
+.workspace-navigation {
+  margin: 1.5rem 0;
+}
 .account-form > button {
   margin-top: 0.75rem;
 }
