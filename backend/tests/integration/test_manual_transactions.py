@@ -11,8 +11,9 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.util.exc import CommandError
 from fastapi.testclient import TestClient
-from sqlalchemy import event, func, insert, inspect, select, update
+from sqlalchemy import delete, event, func, insert, inspect, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.api.dependencies import get_database
@@ -28,9 +29,11 @@ from app.models import (
     Transaction,
     TransactionCreationRequest,
     Transfer,
+    TransferCreationRequest,
     User,
 )
 from app.schemas.transactions import TransactionInput, TransactionUpdateInput
+from app.schemas.transfers import TransferInput
 from app.services.sessions import AuthenticationDenied, SessionService, SessionUnavailable
 from app.services.transactions import (
     TransactionRejected,
@@ -39,6 +42,7 @@ from app.services.transactions import (
     TransactionStale,
     transaction_etag,
 )
+from app.services.transfers import TransferService
 
 pytestmark = pytest.mark.postgres
 PASSWORD = "synthetic transaction password"
@@ -1050,3 +1054,208 @@ def test_deletion_rejects_imports_and_commit_failures_but_allows_archived_manual
     sessions.revoke_by_access(token)
     with pytest.raises(AuthenticationDenied):
         service.delete(token, transaction_id, transaction_etag(snapshot))
+
+
+@pytest.fixture
+def transfer_resources(context, resources):
+    database = context[0]
+    with database.sessions.begin() as session:
+        for item in resources:
+            target = Account(
+                user_id=item["owner"],
+                name="Destination",
+                type="savings",
+                opening_balance=Decimal("1000.00"),
+                opening_date=date(2026, 1, 3),
+            )
+            session.add(target)
+            session.flush()
+            item["target"] = target.id
+    yield resources
+    assert database.engine.url.database.startswith("finsight_test_")
+    # Remove only this test's synthetic request records before the shared schema teardown.
+    with database.sessions.begin() as session:
+        session.execute(
+            delete(TransferCreationRequest).where(
+                TransferCreationRequest.user_id.in_([item["owner"] for item in resources])
+            )
+        )
+
+
+def transfer_body(resource, **changes):
+    return {
+        "from_account_id": str(resource["account"]),
+        "to_account_id": str(resource["target"]),
+        "amount": "500.00",
+        "status": "posted",
+        "effective_date": "2026-01-04",
+    } | changes
+
+
+def test_transfers_http_authorizes_both_accounts_and_preserves_exact_total(
+    context, transfer_resources
+):
+    own, foreign = transfer_resources
+    stack, make = clients(context)
+    with stack:
+        client, other = make(context[3][0]), make(context[3][1])
+        path = "/api/v1/transfers"
+        key = uuid4()
+        data = transfer_body(own)
+        headers = {
+            "Origin": ORIGIN,
+            "X-CSRF-Token": client.cookies.get("__Host-finsight-csrf"),
+            "Idempotency-Key": str(key),
+        }
+        assert client.post(path, json=data, headers={"Origin": ORIGIN}).status_code == 403
+        assert (
+            client.post(
+                path,
+                json=data,
+                headers={k: v for k, v in headers.items() if k != "Idempotency-Key"},
+            ).status_code
+            == 422
+        )
+        for change in (
+            {"to_account_id": str(own["account"])},
+            {"to_account_id": str(foreign["target"])},
+            {"from_account_id": str(foreign["account"])},
+            {"effective_date": "2026-01-03"},
+        ):
+            assert client.post(path, json=data | change, headers=headers).status_code == 422
+        invalid = client.post(path, json=data | {"user_id": "private-marker"}, headers=headers)
+        assert invalid.status_code == 422 and "private-marker" not in invalid.text
+        response = client.post(path, json=data, headers=headers)
+        assert response.status_code == 201 and set(response.json()) == {"id"}
+        location = response.headers["location"]
+        assert client.post(path, json=data, headers=headers).json() == response.json()
+        assert (
+            client.post(path, json=data | {"amount": "500.01"}, headers=headers).status_code == 409
+        )
+        detail = client.get(location)
+        assert (
+            detail.json()["amount"] == "500.00"
+            and detail.json()["to_account_name"] == "Destination"
+        )
+        assert detail.headers["cache-control"] == "no-store"
+        assert (
+            other.get(location).status_code
+            == other.get(path + "/" + str(uuid4())).status_code
+            == 404
+        )
+        assert other.get(path).json()["items"] == []
+        first = balance(client, own).json()["balance"]
+        target = client.get(
+            f"/api/v1/accounts/{own['target']}/balance", params={"as_of": "2026-01-04"}
+        ).json()["balance"]
+        assert first == "500.00" and target == "1500.00"
+        assert Decimal(first) + Decimal(target) == Decimal("2000.00")
+        assert balance(client, own, "2026-01-03").json()["balance"] == "1000.00"
+        assert client.get(PATH).json()["items"] == []
+        assert (
+            client.post(
+                path,
+                json=data | {"status": "planned", "amount": "200.00"},
+                headers=headers | {"Idempotency-Key": str(uuid4())},
+            ).status_code
+            == 201
+        )
+        assert balance(client, own).json()["balance"] == "500.00"
+        page = client.get(path, params={"limit": 1, "account_id": str(own["target"])}).json()
+        assert len(page["items"]) == 1 and page["has_more"]
+        assert len(client.get(path, params={"status": "planned"}).json()["items"]) == 1
+        assert (
+            client.get(
+                path, params={"date_from": "2026-02-01", "date_to": "2026-01-01"}
+            ).status_code
+            == 422
+        )
+        with context[0].sessions.begin() as session:
+            session.get(Account, own["target"]).is_active = False
+        assert client.post(path, json=data, headers=headers).json() == response.json()
+        assert (
+            client.post(
+                path, json=data, headers=headers | {"Idempotency-Key": str(uuid4())}
+            ).status_code
+            == 422
+        )
+
+
+def test_transfers_concurrent_retries_book_once_and_migration_retains_identity(
+    context, transfer_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransferService(sessions)
+    key = uuid4()
+    data = TransferInput(**transfer_body(own))
+    barrier = Barrier(2)
+
+    def create_once():
+        barrier.wait(timeout=10)
+        return service.create(token, key, data)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(create_once) for _ in range(2)]
+        ids = [future.result(timeout=20) for future in futures]
+    assert ids[0] == ids[1]
+    with database.sessions() as session:
+        assert (
+            session.scalar(
+                select(func.count()).select_from(Transfer).where(Transfer.user_id == own["owner"])
+            )
+            == 1
+        )
+        assert session.get(TransferCreationRequest, (own["owner"], key)).transfer_id == ids[0]
+    with database.engine.begin() as connection:
+        config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+        config.attributes["connection"] = connection
+        with pytest.raises(IntegrityError), connection.begin_nested():
+            connection.execute(
+                insert(TransferCreationRequest).values(
+                    user_id=transfer_resources[1]["owner"],
+                    idempotency_key=uuid4(),
+                    request_hash="a" * 64,
+                    transfer_id=ids[0],
+                )
+            )
+        with pytest.raises(CommandError), connection.begin_nested():
+            command.downgrade(config, "0010_transaction_deletion")
+        command.check(config)
+    assert service.create(token, key, data) == ids[0]
+
+
+def test_transfer_commit_failure_and_revocation_leave_both_accounts_unchanged(
+    context, transfer_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransferService(sessions)
+    balances = TransactionService(sessions)
+    key = uuid4()
+    data = TransferInput(**transfer_body(own))
+
+    def fail(_session):
+        raise SQLAlchemyError("synthetic atomic transfer failure")
+
+    event.listen(database.sessions.class_, "before_commit", fail)
+    try:
+        with pytest.raises(SessionUnavailable):
+            service.create(token, key, data)
+    finally:
+        event.remove(database.sessions.class_, "before_commit", fail)
+    for account in (own["account"], own["target"]):
+        assert balances.balance(token, account, date(2026, 1, 4)).balance == Decimal("1000.00")
+    with database.sessions() as session:
+        assert session.get(TransferCreationRequest, (own["owner"], key)) is None
+        assert (
+            session.scalar(
+                select(func.count()).select_from(Transfer).where(Transfer.user_id == own["owner"])
+            )
+            == 0
+        )
+    sessions.revoke_by_access(token)
+    with pytest.raises(AuthenticationDenied):
+        service.create(token, key, data)

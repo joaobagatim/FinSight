@@ -15,6 +15,7 @@ from app.api.health import router as health_router
 from app.api.session_auth import router as session_router
 from app.api.transactions import balance_router
 from app.api.transactions import router as transactions_router
+from app.api.transfers import router as transfers_router
 from app.api.users import router as users_router
 from app.core.auth_cookies import CookiePolicyRejected
 from app.core.config import Settings
@@ -45,6 +46,7 @@ from app.services.transactions import (
     TransactionRemoved,
     TransactionStale,
 )
+from app.services.transfers import TransferConflict, TransferNotFound, TransferRejected
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -129,6 +131,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def category_stale(_request, _error):
         return JSONResponse({"detail": "Category changed; reload before updating"}, status_code=412)
 
+    @application.exception_handler(TransferNotFound)
+    async def transfer_not_found(_request, _error):
+        return JSONResponse({"detail": "Transfer not found"}, status_code=404)
+
+    @application.exception_handler(TransferRejected)
+    async def transfer_rejected(_request, _error):
+        return JSONResponse({"detail": "Invalid transfer accounts or date"}, status_code=422)
+
+    @application.exception_handler(TransferConflict)
+    async def transfer_conflict(_request, _error):
+        return JSONResponse({"detail": "Idempotency key conflict"}, status_code=409)
+
     @application.exception_handler(TransactionNotFound)
     async def transaction_not_found(_request, _error):
         return JSONResponse({"detail": "Transaction not found"}, status_code=404)
@@ -183,5 +197,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(accounts_router)
     application.include_router(categories_router)
     application.include_router(transactions_router)
+    application.include_router(transfers_router)
     application.include_router(balance_router)
     return application

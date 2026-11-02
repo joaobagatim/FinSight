@@ -11,6 +11,7 @@ from app.models.refresh_token_history import RefreshTokenHistory
 from app.models.transaction import Transaction
 from app.models.transaction_creation_request import TransactionCreationRequest
 from app.models.transfer import Transfer
+from app.models.transfer_creation_request import TransferCreationRequest
 from app.models.user import User
 from app.models.user_session import UserSession
 
@@ -26,6 +27,7 @@ __all__ = [
     "Transaction",
     "TransactionCreationRequest",
     "Transfer",
+    "TransferCreationRequest",
     "User",
     "UserSession",
 ]
