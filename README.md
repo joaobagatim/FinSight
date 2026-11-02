@@ -1132,7 +1132,7 @@ Uma nova criação nessas entidades desativadas é rejeitada.
 `GET /api/v1/transactions` lista com `limit` padrão50/máximo100, `offset` e
 `has_more`, em ordem decrescente de data, criação e UUID. Filtros opcionais:
 `account_id`, `category_id`, `type`, `status`, `date_from` e `date_to` inclusivos.
-Intervalo invertido é inválido. Edição e exclusão serão implementadas separadamente;
+Intervalo invertido é inválido. A edição condicional está descrita abaixo; exclusão será implementada separadamente;
 a efetivação de um planejado é descrita abaixo.
 As consultas individual e de lista também retornam `account_name` e
 `category_name`, com os nomes atuais das entidades vinculadas. O servidor carrega
@@ -1207,8 +1207,39 @@ o controle de sessão existente.
 
 O banco de destino precisa estar na revisão `0009_transaction_requests` para criar
 lançamentos com segurança. A interface e o startup não aplicam a migration ao banco
-pessoal. Esta entrega não acrescenta schema, dependência, edição/exclusão de
-lançamentos ou criação de transferências.
+pessoal. Não há nova migration ou dependência para a interface, edição ou
+efetivação de lançamentos. Exclusão e criação de transferências continuam pendentes.
+
+### Editar um lançamento manual
+
+Use **Editar** no histórico. A tela consulta o registro atual antes de permitir
+alterar descrição, valor, data, conta, categoria, tipo e observações. O valor é
+positivo; o tipo define o sinal. Conta e categoria de destino precisam estar
+ativas e pertencer à mesma pessoa, com categoria compatível e data posterior à
+abertura da conta. Para manter uma referência arquivada, reative-a antes de editar.
+Limpar observações remove o texto. A situação é preservada: planejados continuam
+fora do saldo real até uma confirmação de efetivação separada.
+
+Na API, envie `PATCH /api/v1/transactions/{id}` com ao menos um desses campos,
+sessão, origem autorizada, CSRF e o `ETag` da consulta em `If-Match`. Só
+`notes` aceita `null`; proprietário, status e origem de importação não são
+editáveis. A resposta contém o registro e seu novo ETag. Ausente/inválido retorna
+422; snapshot divergente retorna 412; recurso alheio/inexistente retorna o mesmo
+404. O controle de propriedade e estado ocorre dentro da transação bloqueada.
+Lançamentos vinculados à importação não são editados por este fluxo manual.
+
+Saldos são derivados: mudar valor, tipo, conta ou data de um efetivado recalcula
+as posições nas contas e datas envolvidas, sem outra linha financeira. O digest
+da criação permanece intacto; repetir a chave e o corpo originais retorna o mesmo
+ID sem restaurar dados antigos. Não há endpoint DELETE nesta entrega.
+
+A interface bloqueia ações paralelas de cadastro/edição/efetivação. Em resposta
+incerta ou conflito, consulte **Recarregar situação**: a consulta substitui o
+rascunho pelo estado atual, sem outro PATCH. Se os campos conferidos já estão
+salvos, a tela reconhece o resultado; caso contrário exige nova revisão e ação
+explícita. Isso não constitui comprovante de autoria de uma edição. O histórico
+é recarregado desde a primeira página para preservar a ordem após mudar datas,
+e o saldo anterior é ocultado até nova consulta. Não há rascunhos em storage.
 
 ### Efetivar um lançamento planejado
 

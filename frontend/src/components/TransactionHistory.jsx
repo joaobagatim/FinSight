@@ -3,12 +3,23 @@ import { Button } from '@/components/ui/button'
 import { api, errorMessage } from '@/services/api'
 import { formatDate, formatMoney } from '@/lib/money'
 import PostTransactionPanel from '@/components/PostTransactionPanel'
+import EditTransactionPanel from '@/components/EditTransactionPanel'
 
-export default function TransactionHistory({ ownerId, onExpired, disabled, onBalanceChanged }) {
+export default function TransactionHistory({
+  ownerId,
+  onExpired,
+  disabled,
+  onBalanceChanged,
+  references,
+  onActionChange,
+}) {
   const [page, setPage] = useState({ items: [], has_more: false })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [postingId, setPostingId] = useState(null)
+  const [editingId, setEditingId] = useState(null)
+  const [refresh, setRefresh] = useState(0)
+  const actionOpen = Boolean(postingId || editingId)
   const heading = useRef(null)
   const resolved = useCallback(
     (item) => {
@@ -22,6 +33,23 @@ export default function TransactionHistory({ ownerId, onExpired, disabled, onBal
   )
   const live = useRef(false)
   const requestVersion = useRef(0)
+  const edited = useCallback(
+    (item) => {
+      resolved(item)
+      // Reset pagination after edits because changing the date can move a row across pages.
+      setLoading(true)
+      setError('')
+      setRefresh((value) => value + 1)
+    },
+    [resolved],
+  )
+
+  function closeAction() {
+    setPostingId(null)
+    setEditingId(null)
+    onActionChange(false)
+    heading.current?.focus()
+  }
 
   useEffect(() => {
     let current = true
@@ -44,7 +72,7 @@ export default function TransactionHistory({ ownerId, onExpired, disabled, onBal
       live.current = false
       requestVersion.current += 1
     }
-  }, [ownerId, onExpired])
+  }, [ownerId, onExpired, refresh])
 
   async function reload(append = false) {
     const version = ++requestVersion.current
@@ -79,7 +107,7 @@ export default function TransactionHistory({ ownerId, onExpired, disabled, onBal
           type="button"
           variant="outline"
           size="sm"
-          disabled={loading || Boolean(postingId)}
+          disabled={loading || actionOpen}
           onClick={() => reload()}
         >
           Atualizar lançamentos
@@ -106,10 +134,20 @@ export default function TransactionHistory({ ownerId, onExpired, disabled, onBal
           onExpired={onExpired}
           onResolved={resolved}
           onAttempt={onBalanceChanged}
-          onClose={() => {
-            setPostingId(null)
-            heading.current?.focus()
-          }}
+          onClose={closeAction}
+        />
+      )}
+      {editingId && (
+        <EditTransactionPanel
+          key={editingId}
+          ownerId={ownerId}
+          transactionId={editingId}
+          references={references}
+          disabled={disabled}
+          onExpired={onExpired}
+          onResolved={edited}
+          onAttempt={onBalanceChanged}
+          onClose={closeAction}
         />
       )}
       <ul className="account-cards" aria-label="Lançamentos cadastrados">
@@ -138,19 +176,34 @@ export default function TransactionHistory({ ownerId, onExpired, disabled, onBal
                 <dd>{formatDate(item.effective_date)}</dd>
               </div>
             </dl>
-            {item.status === 'planned' && (
-              <div className="account-actions">
+            <div className="account-actions">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={loading || disabled || actionOpen}
+                onClick={() => {
+                  setEditingId(item.id)
+                  onActionChange(true)
+                }}
+              >
+                Editar
+              </Button>
+              {item.status === 'planned' && (
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={loading || disabled || Boolean(postingId)}
-                  onClick={() => setPostingId(item.id)}
+                  disabled={loading || disabled || actionOpen}
+                  onClick={() => {
+                    setPostingId(item.id)
+                    onActionChange(true)
+                  }}
                 >
                   Efetivar
                 </Button>
-              </div>
-            )}
+              )}
+            </div>
             {item.notes && (
               <details className="movement-notes">
                 <summary>Observações</summary>
@@ -164,15 +217,15 @@ export default function TransactionHistory({ ownerId, onExpired, disabled, onBal
         <Button
           type="button"
           variant="outline"
-          disabled={loading || Boolean(postingId)}
+          disabled={loading || actionOpen}
           onClick={() => reload(true)}
         >
           Carregar mais lançamentos
         </Button>
       )}
       <p className="field-hint">
-        Planejados não alteram o saldo real até você confirmar sua efetivação. Alteração e exclusão
-        estarão disponíveis em outra etapa.
+        Planejados não alteram o saldo real até você confirmar sua efetivação. A edição mantém a
+        situação atual. Exclusão estará disponível em outra etapa.
       </p>
     </section>
   )

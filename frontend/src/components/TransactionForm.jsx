@@ -5,6 +5,7 @@ import { formatDate, formatMoney, parseMoney, today } from '@/lib/money'
 
 export default function TransactionForm({
   ownerId,
+  disabled = false,
   references,
   intent,
   onIntent,
@@ -84,7 +85,7 @@ export default function TransactionForm({
 
   function submit(event) {
     event.preventDefault()
-    if (sending.current || intent) return
+    if (sending.current || intent || disabled) return
     setError('')
     let money
     try {
@@ -160,7 +161,9 @@ export default function TransactionForm({
       )}
       <form onSubmit={submit} aria-label="Novo lançamento">
         <fieldset
-          disabled={saving || Boolean(intent) || references.loading || Boolean(references.error)}
+          disabled={
+            disabled || saving || Boolean(intent) || references.loading || Boolean(references.error)
+          }
         >
           <legend className="sr-only">Dados do lançamento</legend>
           <div className="field">
