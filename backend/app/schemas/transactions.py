@@ -13,13 +13,14 @@ from pydantic import (
     Field,
     field_serializer,
     field_validator,
+    model_validator,
 )
 
 from app.schemas.accounts import AccountInput
 from app.schemas.auth import RegistrationInput
 
 
-class TransactionInput(BaseModel):
+class TransactionDetailsInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True, hide_input_in_errors=True)
 
     account_id: UUID4
@@ -27,7 +28,6 @@ class TransactionInput(BaseModel):
     description: str = Field(min_length=1, max_length=255)
     amount: Decimal = Field(gt=0, max_digits=15, decimal_places=2)
     type: Literal["income", "expense"]
-    status: Literal["planned", "posted"]
     effective_date: date
     notes: str | None = Field(default=None, max_length=2000)
 
@@ -66,6 +66,27 @@ class TransactionInput(BaseModel):
     @field_serializer("amount", when_used="json")
     def money_string(self, value: Decimal) -> str:
         return format(value, ".2f")
+
+
+class TransactionInput(TransactionDetailsInput):
+    status: Literal["planned", "posted"]
+
+
+class TransactionUpdateInput(TransactionDetailsInput):
+    account_id: UUID4 | None = None
+    category_id: UUID4 | None = None
+    description: str | None = Field(default=None, min_length=1, max_length=255)
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=15, decimal_places=2)
+    type: Literal["income", "expense"] | None = None
+    effective_date: date | None = None
+
+    @model_validator(mode="after")
+    def nonempty_nonnull(self):
+        if not self.model_fields_set or any(
+            getattr(self, name) is None for name in self.model_fields_set - {"notes"}
+        ):
+            raise ValueError("Supply at least one field; only notes may be null")
+        return self
 
 
 class TransactionPostInput(BaseModel):

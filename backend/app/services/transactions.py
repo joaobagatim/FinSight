@@ -16,6 +16,7 @@ from app.schemas.transactions import (
     TransactionInput,
     TransactionListResponse,
     TransactionResponse,
+    TransactionUpdateInput,
 )
 from app.services.accounts import AccountNotFound
 from app.services.sessions import SessionService
@@ -149,6 +150,55 @@ class TransactionService:
             )
             if row is None:
                 raise TransactionNotFound()
+            result = TransactionResponse.model_validate(row)
+        return result
+
+    def update(
+        self, token: SecretStr, transaction_id: UUID, data: TransactionUpdateInput, etag: str
+    ) -> TransactionResponse:
+        with self.sessions.authorized_transaction(token, lock=True) as (session, owner):
+            row = session.scalar(
+                select(Transaction)
+                .where(Transaction.id == transaction_id, Transaction.user_id == owner.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if row is None:
+                raise TransactionNotFound()
+            current = TransactionResponse.model_validate(row)
+            if not hmac.compare_digest(transaction_etag(current), etag):
+                raise TransactionStale()
+            if row.import_row_id is not None:
+                # Imported provenance needs a dedicated reconciliation policy.
+                raise TransactionRejected()
+            changes = data.model_dump(exclude_unset=True)
+            account_id = changes.get("account_id", row.account_id)
+            category_id = changes.get("category_id", row.category_id)
+            account = session.scalar(
+                select(Account)
+                .where(Account.id == account_id, Account.user_id == owner.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            category = session.scalar(
+                select(Category)
+                .where(Category.id == category_id, Category.user_id == owner.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if (
+                account is None
+                or category is None
+                or not account.is_active
+                or not category.is_active
+                or category.type != changes.get("type", row.type)
+                or changes.get("effective_date", row.effective_date) <= account.opening_date
+            ):
+                raise TransactionRejected()
+            for field, value in changes.items():
+                setattr(row, field, value)
+            row.account, row.category = account, category
+            session.flush()
             result = TransactionResponse.model_validate(row)
         return result
 

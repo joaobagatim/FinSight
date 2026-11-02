@@ -143,7 +143,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.exception_handler(TransactionStale)
     async def transaction_stale(_request, _error):
         return JSONResponse(
-            {"detail": "Transaction changed; reload before posting"}, status_code=412
+            {"detail": "Transaction changed; reload before updating"}, status_code=412
         )
 
     @application.exception_handler(Exception)

@@ -1,4 +1,4 @@
-"""Manual financial movements; imports, edits and deletion are separate flows."""
+"""Owned manual financial movements with conditional updates and posting."""
 
 from datetime import date
 from typing import Annotated, Literal
@@ -18,6 +18,7 @@ from app.schemas.transactions import (
     TransactionListResponse,
     TransactionPostInput,
     TransactionResponse,
+    TransactionUpdateInput,
 )
 from app.services.sessions import SessionService
 from app.services.transactions import TransactionService, transaction_etag
@@ -77,6 +78,22 @@ def get_transaction(
     service: Annotated[TransactionService, Depends(transaction_service)],
 ):
     result = service.get(token, transaction_id)
+    response.headers["ETag"] = transaction_etag(result)
+    return result
+
+
+@router.patch("/{transaction_id}", response_model=TransactionResponse)
+def update_transaction(
+    transaction_id: UUID,
+    data: TransactionUpdateInput,
+    response: Response,
+    token: Annotated[SecretStr, Depends(category_mutation)],
+    service: Annotated[TransactionService, Depends(transaction_service)],
+    etag: Annotated[
+        str, Header(alias="If-Match", min_length=66, max_length=66, pattern=r'^"[0-9a-f]{64}"$')
+    ],
+):
+    result = service.update(token, transaction_id, data, etag)
     response.headers["ETag"] = transaction_etag(result)
     return result
 
