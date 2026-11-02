@@ -25,7 +25,7 @@ from app.core.session_http import (
 )
 from app.core.tokens import TokenConfigurationError
 from app.db.session import Database
-from app.services.accounts import AccountConflict, AccountNotFound
+from app.services.accounts import AccountConflict, AccountNotFound, AccountStale
 from app.services.registration import RegistrationUnavailable
 from app.services.sessions import (
     AuthenticationDenied,
@@ -99,6 +99,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.exception_handler(AccountConflict)
     async def account_conflict(_request, _error):
         return JSONResponse({"detail": "Idempotency key conflict"}, status_code=409)
+
+    @application.exception_handler(AccountStale)
+    async def account_stale(_request, _error):
+        return JSONResponse({"detail": "Account changed; reload before updating"}, status_code=412)
 
     @application.exception_handler(Exception)
     async def unexpected_error(request, _error):

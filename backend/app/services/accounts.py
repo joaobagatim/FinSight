@@ -9,7 +9,12 @@ from pydantic import SecretStr
 from sqlalchemy import select
 
 from app.models import Account, AccountCreationRequest
-from app.schemas.accounts import AccountInput, AccountListResponse, AccountResponse
+from app.schemas.accounts import (
+    AccountInput,
+    AccountListResponse,
+    AccountResponse,
+    AccountUpdateInput,
+)
 from app.services.sessions import SessionService
 
 
@@ -19,6 +24,17 @@ class AccountNotFound(Exception):
 
 class AccountConflict(Exception):
     pass
+
+
+class AccountStale(Exception):
+    pass
+
+
+def account_etag(account: AccountResponse) -> str:
+    canonical = json.dumps(
+        account.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return '"' + hashlib.sha256(canonical.encode("utf-8")).hexdigest() + '"'
 
 
 class AccountService:
@@ -76,5 +92,27 @@ class AccountService:
             )
             if row is None:
                 raise AccountNotFound()
+            result = AccountResponse.model_validate(row)
+        return result
+
+    def update(
+        self, token: SecretStr, account_id: UUID, data: AccountUpdateInput, expected_etag: str
+    ) -> AccountResponse:
+        with self.sessions.authorized_transaction(token, lock=True) as (session, owner):
+            row = session.scalar(
+                select(Account)
+                .where(Account.id == account_id, Account.user_id == owner.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if row is None:
+                raise AccountNotFound()
+            if not hmac.compare_digest(
+                account_etag(AccountResponse.model_validate(row)), expected_etag
+            ):
+                raise AccountStale()
+            for field, value in data.model_dump(exclude_unset=True).items():
+                setattr(row, field, value)
+            session.flush()
             result = AccountResponse.model_validate(row)
         return result

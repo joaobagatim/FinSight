@@ -2,6 +2,8 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from threading import Barrier, Event
 from uuid import uuid4
@@ -18,9 +20,9 @@ from app.core.config import Settings
 from app.core.security import hash_password
 from app.db.session import Database
 from app.main import create_app
-from app.models import Account, AccountCreationRequest, User
-from app.schemas.accounts import AccountInput
-from app.services.accounts import AccountConflict, AccountService
+from app.models import Account, AccountCreationRequest, Category, Transaction, User
+from app.schemas.accounts import AccountInput, AccountUpdateInput
+from app.services.accounts import AccountConflict, AccountService, AccountStale, account_etag
 from app.services.sessions import AuthenticationDenied, SessionService, SessionUnavailable
 
 pytestmark = pytest.mark.postgres
@@ -120,6 +122,191 @@ def counts(database, user):
             session.scalar(select(func.count()).select_from(model).where(model.user_id == user))
             for model in (Account, AccountCreationRequest)
         )
+
+
+def patch(client, location, etag, data):
+    return client.patch(
+        location,
+        json=data,
+        headers={
+            "Origin": ORIGIN,
+            "X-CSRF-Token": client.cookies.get("__Host-finsight-csrf") or "",
+            "If-Match": etag,
+        },
+    )
+
+
+def test_conditional_edits_archive_and_owner_isolation(context):
+    stack, make = clients(context)
+    with stack:
+        owner, other = make(context[3][0]), make(context[3][1])
+        key = uuid4()
+        created = create(owner, key)
+        location = created.headers["location"]
+        original = owner.get(location)
+        etag = original.headers["etag"]
+        changed = patch(owner, location, etag, {"name": "Renamed", "type": "savings"})
+        assert changed.status_code == 200 and changed.headers["etag"] != etag
+        assert changed.json() == original.json() | {"name": "Renamed", "type": "savings"}
+        assert patch(owner, location, etag, {"name": "Stale"}).status_code == 412
+        current = changed.headers["etag"]
+        foreign = patch(other, location, current, {"is_active": False})
+        missing = patch(other, f"{PATH}/{uuid4()}", current, {"is_active": False})
+        assert foreign.status_code == missing.status_code == 404
+        assert foreign.json() == missing.json()
+        assert patch(owner, location, current, {"opening_balance": "99.00"}).status_code == 422
+        assert (
+            owner.patch(
+                location,
+                json={"name": "Rejected"},
+                headers={
+                    "Origin": ORIGIN,
+                    "If-Match": current,
+                },
+            ).status_code
+            == 403
+        )
+        assert (
+            owner.patch(
+                location,
+                json={"name": "Rejected"},
+                headers={
+                    "Origin": ORIGIN,
+                    "X-CSRF-Token": owner.cookies.get("__Host-finsight-csrf"),
+                },
+            ).status_code
+            == 422
+        )
+        archived = patch(owner, location, current, {"is_active": False})
+        assert archived.status_code == 200 and not archived.json()["is_active"]
+        repeated = patch(owner, location, archived.headers["etag"], {"is_active": False})
+        assert repeated.status_code == 200 and repeated.headers["etag"] == archived.headers["etag"]
+        assert create(owner, key).json() == created.json()
+        assert owner.get(location).json() == archived.json()
+        restored = patch(owner, location, archived.headers["etag"], {"is_active": True})
+        assert restored.status_code == 200 and restored.json()["is_active"]
+        assert restored.headers["cache-control"] == "no-store"
+        cors = owner.options(
+            location,
+            headers={
+                "Origin": ORIGIN,
+                "Access-Control-Request-Method": "PATCH",
+                "Access-Control-Request-Headers": "if-match,content-type,x-csrf-token",
+            },
+        )
+        assert (
+            cors.status_code == 200 and "ETag" in restored.headers["access-control-expose-headers"]
+        )
+        assert (
+            owner.patch(
+                location,
+                content="x" * 17000,
+                headers={
+                    "Content-Type": "application/json",
+                    "Origin": ORIGIN,
+                },
+            ).status_code
+            == 413
+        )
+        assert (
+            owner.patch(
+                location,
+                json={"name": "Rejected"},
+                headers=[
+                    ("If-Match", etag),
+                    ("If-Match", etag),
+                    ("Origin", ORIGIN),
+                ],
+            ).status_code
+            == 403
+        )
+
+
+def test_concurrent_account_edits_reject_stale_snapshot(context):
+    _, sessions, _, emails = context
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = AccountService(sessions)
+    account_id = service.create(token, uuid4(), AccountInput(**BODY))
+    etag = account_etag(service.get(token, account_id))
+    barrier = Barrier(2)
+
+    def run(name):
+        barrier.wait(timeout=10)
+        try:
+            service.update(token, account_id, AccountUpdateInput(name=name), etag)
+            return "saved"
+        except AccountStale:
+            return "stale"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(run, name) for name in ("First", "Second")]
+        assert sorted(f.result(timeout=20) for f in futures) == ["saved", "stale"]
+    assert service.get(token, account_id).name in {"First", "Second"}
+
+
+def test_failed_account_update_rolls_back(context):
+    database, sessions, _, emails = context
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = AccountService(sessions)
+    account_id = service.create(token, uuid4(), AccountInput(**BODY))
+    original = service.get(token, account_id)
+
+    def fail(_session):
+        raise SQLAlchemyError("synthetic commit failure")
+
+    event.listen(database.sessions.class_, "before_commit", fail)
+    try:
+        with pytest.raises(SessionUnavailable):
+            service.update(
+                token,
+                account_id,
+                AccountUpdateInput(name="Lost", is_active=False),
+                account_etag(original),
+            )
+    finally:
+        event.remove(database.sessions.class_, "before_commit", fail)
+    assert service.get(token, account_id) == original
+
+
+def test_archiving_preserves_existing_financial_history(context):
+    database, sessions, _, emails = context
+    grant = sessions.login(emails[0], PASSWORD)
+    service = AccountService(sessions)
+    account_id = service.create(grant.access_token, uuid4(), AccountInput(**BODY))
+    with database.sessions.begin() as session:
+        category = Category(user_id=grant.context.user_id, name="Synthetic income", type="income")
+        session.add(category)
+        session.flush()
+        transaction = Transaction(
+            user_id=grant.context.user_id,
+            account_id=account_id,
+            category_id=category.id,
+            description="Synthetic history",
+            amount=Decimal("12.34"),
+            type="income",
+            status="posted",
+            effective_date=date(2026, 1, 2),
+        )
+        session.add(transaction)
+        session.flush()
+        transaction_id = transaction.id
+        snapshot = {
+            column.name: getattr(transaction, column.name)
+            for column in Transaction.__table__.columns
+        }
+    original = service.get(grant.access_token, account_id)
+    archived = service.update(
+        grant.access_token, account_id, AccountUpdateInput(is_active=False), account_etag(original)
+    )
+    assert not archived.is_active
+    assert archived.opening_balance == original.opening_balance
+    assert archived.opening_date == original.opening_date
+    with database.sessions() as session:
+        stored = session.get(Transaction, transaction_id)
+        assert stored is not None
+        assert {
+            column.name: getattr(stored, column.name) for column in Transaction.__table__.columns
+        } == snapshot
 
 
 def test_http_create_retry_list_and_owner_isolation(context):
