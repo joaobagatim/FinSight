@@ -42,7 +42,7 @@ from app.services.transactions import (
     TransactionStale,
     transaction_etag,
 )
-from app.services.transfers import TransferService
+from app.services.transfers import TransferRejected, TransferService, TransferStale, transfer_etag
 
 pytestmark = pytest.mark.postgres
 PASSWORD = "synthetic transaction password"
@@ -1259,3 +1259,176 @@ def test_transfer_commit_failure_and_revocation_leave_both_accounts_unchanged(
     sessions.revoke_by_access(token)
     with pytest.raises(AuthenticationDenied):
         service.create(token, key, data)
+
+
+def test_transfer_posting_http_requires_confirmation_and_preserves_creation_identity(
+    context, transfer_resources
+):
+    own = transfer_resources[0]
+    stack, make = clients(context)
+    with stack:
+        client, other = make(context[3][0]), make(context[3][1])
+        key = uuid4()
+        data = transfer_body(own, status="planned")
+        headers = {
+            "Origin": ORIGIN,
+            "X-CSRF-Token": client.cookies.get("__Host-finsight-csrf"),
+            "Idempotency-Key": str(key),
+        }
+        created = client.post("/api/v1/transfers", json=data, headers=headers)
+        location = created.headers["location"]
+        snapshot = client.get(location)
+        confirm = {
+            "Origin": ORIGIN,
+            "X-CSRF-Token": headers["X-CSRF-Token"],
+            "If-Match": snapshot.headers["etag"],
+        }
+        assert (
+            client.post(
+                location + "/post",
+                json={},
+                headers={"Origin": ORIGIN, "If-Match": confirm["If-Match"]},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                location + "/post",
+                json={},
+                headers={k: v for k, v in confirm.items() if k != "If-Match"},
+            ).status_code
+            == 422
+        )
+        invalid = client.post(
+            location + "/post", json={"amount": "private-marker"}, headers=confirm
+        )
+        assert invalid.status_code == 422 and "private-marker" not in invalid.text
+        assert (
+            client.post(
+                location + "/post", json={}, headers=confirm | {"If-Match": '"' + "0" * 64 + '"'}
+            ).status_code
+            == 412
+        )
+        foreign = confirm | {"X-CSRF-Token": other.cookies.get("__Host-finsight-csrf")}
+        denied = other.post(location + "/post", json={}, headers=foreign)
+        missing = other.post(
+            "/api/v1/transfers/" + str(uuid4()) + "/post", json={}, headers=foreign
+        )
+        assert denied.status_code == missing.status_code == 404 and denied.json() == missing.json()
+        assert balance(client, own).json()["balance"] == "1000.00"
+        response = client.post(location + "/post", json={}, headers=confirm)
+        assert response.status_code == 200 and response.json() == snapshot.json() | {
+            "status": "posted"
+        }
+        assert (
+            response.headers["etag"] != confirm["If-Match"]
+            and response.headers["cache-control"] == "no-store"
+        )
+        assert "ETag" in response.headers["access-control-expose-headers"]
+        assert client.post(location + "/post", json={}, headers=confirm).json() == response.json()
+        assert (
+            client.post(
+                location + "/post",
+                json={},
+                headers=confirm | {"If-Match": response.headers["etag"]},
+            ).status_code
+            == 200
+        )
+        assert client.post("/api/v1/transfers", json=data, headers=headers).json() == created.json()
+        assert client.get(location).json()["status"] == "posted"
+        first = balance(client, own).json()["balance"]
+        target = client.get(
+            f"/api/v1/accounts/{own['target']}/balance", params={"as_of": "2026-01-04"}
+        ).json()["balance"]
+        assert (
+            first == "500.00"
+            and target == "1500.00"
+            and Decimal(first) + Decimal(target) == Decimal("2000.00")
+        )
+        assert balance(client, own, "2026-01-03").json()["balance"] == "1000.00"
+        assert client.get(PATH).json()["items"] == []
+
+
+def test_transfer_posting_rechecks_names_both_accounts_and_opening_dates(
+    context, transfer_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransferService(sessions)
+    transfer_id = service.create(
+        token, uuid4(), TransferInput(**transfer_body(own, status="planned"))
+    )
+    original = service.get(token, transfer_id)
+    with database.sessions.begin() as session:
+        session.get(Account, own["target"]).name = "Revised destination"
+    with pytest.raises(TransferStale):
+        service.post(token, transfer_id, transfer_etag(original))
+    current = service.get(token, transfer_id)
+    for account_id in (own["account"], own["target"]):
+        with database.sessions.begin() as session:
+            session.get(Account, account_id).is_active = False
+        with pytest.raises(TransferRejected):
+            service.post(token, transfer_id, transfer_etag(current))
+        with database.sessions.begin() as session:
+            session.get(Account, account_id).is_active = True
+    with database.sessions.begin() as session:
+        session.get(Transfer, transfer_id).effective_date = date(2026, 1, 3)
+    invalid = service.get(token, transfer_id)
+    with pytest.raises(TransferRejected):
+        service.post(token, transfer_id, transfer_etag(invalid))
+    assert service.get(token, transfer_id).status == "planned"
+    assert TransactionService(sessions).balance(
+        token, own["account"], date(2026, 1, 4)
+    ).balance == Decimal("1000.00")
+
+
+def test_transfer_posting_concurrency_rollback_revocation_and_archived_replay(
+    context, transfer_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransferService(sessions)
+    data = TransferInput(**transfer_body(own, status="planned"))
+    transfer_id = service.create(token, uuid4(), data)
+    etag = transfer_etag(service.get(token, transfer_id))
+    barrier = Barrier(2)
+
+    def confirm():
+        barrier.wait(timeout=10)
+        return service.post(token, transfer_id, etag)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(confirm) for _ in range(2)]
+        posted = [future.result(timeout=20) for future in futures]
+    assert all(row.id == transfer_id and row.status == "posted" for row in posted)
+    second_id = service.create(token, uuid4(), data)
+    second = service.get(token, second_id)
+
+    def fail(_session):
+        raise SQLAlchemyError("synthetic transfer posting failure")
+
+    event.listen(database.sessions.class_, "before_commit", fail)
+    try:
+        with pytest.raises(SessionUnavailable):
+            service.post(token, second_id, transfer_etag(second))
+    finally:
+        event.remove(database.sessions.class_, "before_commit", fail)
+    assert service.get(token, second_id) == second
+    with database.sessions.begin() as session:
+        assert (
+            session.scalar(
+                select(func.count()).select_from(Transfer).where(Transfer.user_id == own["owner"])
+            )
+            == 2
+        )
+        session.get(Account, own["account"]).is_active = False
+        session.get(Account, own["target"]).is_active = False
+    assert service.post(token, transfer_id, etag).status == "posted"
+    balances = TransactionService(sessions)
+    assert balances.balance(token, own["account"], date(2026, 1, 4)).balance == Decimal("500.00")
+    assert balances.balance(token, own["target"], date(2026, 1, 4)).balance == Decimal("1500.00")
+    sessions.revoke_by_access(token)
+    with pytest.raises(AuthenticationDenied):
+        service.post(token, second_id, transfer_etag(second))

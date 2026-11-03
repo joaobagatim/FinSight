@@ -4,7 +4,7 @@ from datetime import date
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import SecretStr
 
 from app.api.dependencies import get_session_service
@@ -13,10 +13,11 @@ from app.schemas.transfers import (
     TransferCreatedResponse,
     TransferInput,
     TransferListResponse,
+    TransferPostInput,
     TransferResponse,
 )
 from app.services.sessions import SessionService
-from app.services.transfers import TransferService
+from app.services.transfers import TransferService, transfer_etag
 
 router = APIRouter(prefix="/api/v1/transfers", tags=["transfers"])
 
@@ -41,10 +42,29 @@ def create_transfer(
 @router.get("/{transfer_id}", response_model=TransferResponse)
 def get_transfer(
     transfer_id: UUID,
+    response: Response,
     token: Annotated[SecretStr, Depends(financial_access)],
     service: Annotated[TransferService, Depends(transfer_service)],
 ):
-    return service.get(token, transfer_id)
+    result = service.get(token, transfer_id)
+    response.headers["ETag"] = transfer_etag(result)
+    return result
+
+
+@router.post("/{transfer_id}/post", response_model=TransferResponse)
+def post_transfer(
+    transfer_id: UUID,
+    data: TransferPostInput,
+    response: Response,
+    token: Annotated[SecretStr, Depends(financial_mutation)],
+    service: Annotated[TransferService, Depends(transfer_service)],
+    etag: Annotated[
+        str, Header(alias="If-Match", min_length=66, max_length=66, pattern=r'^"[0-9a-f]{64}"$')
+    ],
+):
+    result = service.post(token, transfer_id, etag)
+    response.headers["ETag"] = transfer_etag(result)
+    return result
 
 
 @router.get("", response_model=TransferListResponse)
