@@ -683,3 +683,21 @@ fieldset {
     padding: 20px;
   }
 }
+/* Consolidated balance selection keeps account names readable on narrow screens. */
+.consolidated-choice {
+  display: flex;
+  align-items: start;
+  gap: 0.75rem;
+  margin-block: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.consolidated-choice input {
+  width: 1.1rem;
+  min-width: 1.1rem;
+  margin-top: 0.2rem;
+}
+
+.consolidated-result {
+  overflow-wrap: anywhere;
+}
