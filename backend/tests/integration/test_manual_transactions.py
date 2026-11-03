@@ -1432,3 +1432,135 @@ def test_transfer_posting_concurrency_rollback_revocation_and_archived_replay(
     sessions.revoke_by_access(token)
     with pytest.raises(AuthenticationDenied):
         service.post(token, second_id, transfer_etag(second))
+
+
+def test_consolidated_balance_scopes_cancel_transfers_and_exclude_unbooked_money(
+    context, transfer_resources, deletion_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransactionService(sessions)
+    TransferService(sessions).create(token, uuid4(), TransferInput(**transfer_body(own)))
+    service.create(token, uuid4(), TransactionInput(**body(own, effective_date="2026-01-04")))
+    service.create(
+        token,
+        uuid4(),
+        TransactionInput(
+            **body(own, status="planned", amount="200.00", effective_date="2026-01-04")
+        ),
+    )
+    service.create(
+        token, uuid4(), TransactionInput(**body(own, amount="100.00", effective_date="2026-01-06"))
+    )
+    removed = service.create(
+        token,
+        uuid4(),
+        TransactionInput(
+            **body(
+                own,
+                type="income",
+                category_id=str(own["income"]),
+                amount="25.00",
+                effective_date="2026-01-04",
+            )
+        ),
+    )
+    service.delete(token, removed, transaction_etag(service.get(token, removed)))
+    stack, make = clients(context)
+    with stack:
+        client, other = make(emails[0]), make(emails[1])
+        path = "/api/v1/accounts/balances/consolidated"
+        params = {"as_of": "2026-01-04"}
+        combined = client.get(path, params=params)
+        assert combined.status_code == 200 and combined.json() == {
+            "as_of": "2026-01-04",
+            "scope": "active",
+            "currency": "BRL",
+            "account_ids": None,
+            "account_count": 2,
+            "balance": "1850.00",
+        }
+        assert combined.headers["cache-control"] == "no-store"
+        assert other.get(path, params=params).json()["balance"] == "2000.00"
+        with database.sessions.begin() as session:
+            session.get(Account, own["target"]).is_active = False
+        assert client.get(path, params=params).json()["balance"] == "350.00"
+        assert client.get(path, params=params | {"scope": "all"}).json()["balance"] == "1850.00"
+        for ids, expected in (
+            ([own["account"]], "350.00"),
+            ([own["target"]], "1500.00"),
+            ([own["account"], own["target"]], "1850.00"),
+        ):
+            response = client.get(
+                path,
+                params=[("as_of", params["as_of"]), ("scope", "selected")]
+                + [("account_id", str(value)) for value in ids],
+            )
+            assert response.status_code == 200 and response.json()["balance"] == expected
+            assert response.json()["account_ids"] == sorted(str(value) for value in ids)
+        assert client.get(path, params={"as_of": "2026-01-02", "scope": "all"}).status_code == 422
+        assert client.get(path, params={"as_of": "2026-01-02"}).json()["balance"] == "1000.00"
+
+
+def test_consolidated_balance_rejects_partial_foreign_selections_and_handles_empty_scope(
+    context, resources
+):
+    stack, make = clients(context)
+    with stack:
+        client = make(context[3][0])
+        path = "/api/v1/accounts/balances/consolidated"
+        own, foreign = resources
+        for foreign_id in (foreign["account"], uuid4()):
+            rejected = client.get(
+                path,
+                params=[
+                    ("as_of", "2026-01-04"),
+                    ("scope", "selected"),
+                    ("account_id", str(own["account"])),
+                    ("account_id", str(foreign_id)),
+                ],
+            )
+            assert rejected.status_code == 404 and rejected.json() == {
+                "detail": "Account not found"
+            }
+        for changes in (
+            {"scope": "selected"},
+            {"scope": "unknown"},
+            {"account_id": str(own["account"])},
+            {"as_of": "2026-02-30"},
+        ):
+            assert client.get(path, params={"as_of": "2026-01-04"} | changes).status_code == 422
+        assert (
+            client.get(
+                path,
+                params=[
+                    ("as_of", "2026-01-04"),
+                    ("scope", "selected"),
+                    ("account_id", str(own["account"])),
+                    ("account_id", str(own["account"])),
+                ],
+            ).status_code
+            == 422
+        )
+        assert (
+            client.get(
+                path,
+                params=[("as_of", "2026-01-04"), ("scope", "selected")]
+                + [("account_id", str(uuid4())) for _ in range(101)],
+            ).status_code
+            == 422
+        )
+        assert client.get(path).status_code == 422
+        with context[0].sessions.begin() as session:
+            session.get(Account, own["account"]).is_active = False
+        empty = client.get(path, params={"as_of": "2026-01-04"})
+        assert (
+            empty.status_code == 200
+            and empty.json()["account_count"] == 0
+            and empty.json()["balance"] == "0.00"
+        )
+        assert (
+            client.get(path, params={"as_of": "2026-01-04", "scope": "all"}).json()["balance"]
+            == "1000.00"
+        )

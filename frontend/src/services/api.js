@@ -120,6 +120,14 @@ async function authenticatedRead(path) {
 }
 
 export const api = {
+  consolidatedBalance: (ownerId, scope, asOf, accountIds) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const query = new URLSearchParams({ scope, as_of: asOf })
+      if (scope === 'selected') accountIds.forEach((id) => query.append('account_id', id))
+      return send(`/accounts/balances/consolidated?${query}`)
+    }),
   transfer: (ownerId, id) =>
     coordinated(async () => {
       const profile = await renewUnlocked()

@@ -1,5 +1,7 @@
 """Idempotent manual movements and derived balances, authorized per owner."""
 
+from __future__ import annotations
+
 import hashlib
 import hmac
 import json
@@ -13,6 +15,7 @@ from sqlalchemy.orm import joinedload
 from app.models import Account, Category, Transaction, TransactionCreationRequest, Transfer
 from app.schemas.transactions import (
     AccountBalanceResponse,
+    ConsolidatedBalanceResponse,
     TransactionInput,
     TransactionListResponse,
     TransactionResponse,
@@ -45,6 +48,60 @@ class TransactionRemoved(Exception):
 def transaction_etag(data: TransactionResponse) -> str:
     canonical = json.dumps(data.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return '"' + hashlib.sha256(canonical.encode()).hexdigest() + '"'
+
+
+def account_balance_query(user_id: UUID, as_of: date):
+    movements = (
+        select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (Transaction.type == "income", Transaction.amount),
+                        else_=-Transaction.amount,
+                    )
+                ),
+                0,
+            )
+        )
+        .where(
+            Transaction.user_id == user_id,
+            Transaction.account_id == Account.id,
+            Transaction.status == "posted",
+            Transaction.deleted_at.is_(None),
+            Transaction.effective_date > Account.opening_date,
+            Transaction.effective_date <= as_of,
+        )
+        .correlate(Account)
+        .scalar_subquery()
+    )
+    transfers = (
+        select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (Transfer.to_account_id == Account.id, Transfer.amount),
+                        else_=-Transfer.amount,
+                    )
+                ),
+                0,
+            )
+        )
+        .where(
+            Transfer.user_id == user_id,
+            Transfer.status == "posted",
+            or_(Transfer.to_account_id == Account.id, Transfer.from_account_id == Account.id),
+            Transfer.effective_date > Account.opening_date,
+            Transfer.effective_date <= as_of,
+        )
+        .correlate(Account)
+        .scalar_subquery()
+    )
+    return select(
+        Account.id,
+        Account.opening_date,
+        Account.opening_balance,
+        (Account.opening_balance + movements + transfers).label("balance"),
+    ).where(Account.user_id == user_id)
 
 
 class TransactionService:
@@ -285,61 +342,8 @@ class TransactionService:
 
     def balance(self, token: SecretStr, account_id: UUID, as_of: date):
         with self.sessions.authorized_transaction(token) as (session, owner):
-            movements = (
-                select(
-                    func.coalesce(
-                        func.sum(
-                            case(
-                                (Transaction.type == "income", Transaction.amount),
-                                else_=-Transaction.amount,
-                            )
-                        ),
-                        0,
-                    )
-                )
-                .where(
-                    Transaction.user_id == owner.user_id,
-                    Transaction.account_id == Account.id,
-                    Transaction.status == "posted",
-                    Transaction.deleted_at.is_(None),
-                    Transaction.effective_date > Account.opening_date,
-                    Transaction.effective_date <= as_of,
-                )
-                .correlate(Account)
-                .scalar_subquery()
-            )
-            transfers = (
-                select(
-                    func.coalesce(
-                        func.sum(
-                            case(
-                                (Transfer.to_account_id == Account.id, Transfer.amount),
-                                else_=-Transfer.amount,
-                            )
-                        ),
-                        0,
-                    )
-                )
-                .where(
-                    Transfer.user_id == owner.user_id,
-                    Transfer.status == "posted",
-                    or_(
-                        Transfer.to_account_id == Account.id, Transfer.from_account_id == Account.id
-                    ),
-                    Transfer.effective_date > Account.opening_date,
-                    Transfer.effective_date <= as_of,
-                )
-                .correlate(Account)
-                .scalar_subquery()
-            )
-            # One SQL statement provides a consistent snapshot without join multiplication.
             row = session.execute(
-                select(
-                    Account.id,
-                    Account.opening_date,
-                    Account.opening_balance,
-                    (Account.opening_balance + movements + transfers).label("balance"),
-                ).where(Account.id == account_id, Account.user_id == owner.user_id)
+                account_balance_query(owner.user_id, as_of).where(Account.id == account_id)
             ).one_or_none()
             if row is None:
                 raise AccountNotFound()
@@ -351,5 +355,46 @@ class TransactionService:
                 opening_date=row.opening_date,
                 opening_balance=row.opening_balance,
                 balance=row.balance,
+            )
+        return result
+
+    def consolidated_balance(
+        self, token: SecretStr, *, as_of: date, scope: str, account_ids: list[UUID] | None
+    ):
+        selected = account_ids or []
+        if (
+            scope not in {"active", "all", "selected"}
+            or (
+                scope == "selected"
+                and (not selected or len(selected) > 100 or len(set(selected)) != len(selected))
+            )
+            or (scope != "selected" and selected)
+        ):
+            raise TransactionRejected()
+        with self.sessions.authorized_transaction(token) as (session, owner):
+            query = account_balance_query(owner.user_id, as_of)
+            if scope == "active":
+                query = query.where(Account.is_active.is_(True))
+            elif scope == "selected":
+                query = query.where(Account.id.in_(selected))
+            balances = query.subquery()
+            # One aggregate statement gives a single MVCC snapshot, including both transfer sides.
+            result_row = session.execute(
+                select(
+                    func.count(balances.c.id).label("account_count"),
+                    func.coalesce(func.sum(balances.c.balance), 0).label("balance"),
+                    func.max(balances.c.opening_date).label("newest_opening"),
+                )
+            ).one()
+            if scope == "selected" and result_row.account_count != len(selected):
+                raise AccountNotFound()
+            if result_row.newest_opening is not None and as_of < result_row.newest_opening:
+                raise TransactionRejected()
+            result = ConsolidatedBalanceResponse(
+                as_of=as_of,
+                scope=scope,
+                account_ids=sorted(selected, key=str) if scope == "selected" else None,
+                account_count=result_row.account_count,
+                balance=result_row.balance,
             )
         return result

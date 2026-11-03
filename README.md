@@ -1156,10 +1156,85 @@ consultada ficam de fora. Uma consulta anterior à abertura é rejeitada.
 Contas/categorias arquivadas continuam compondo seu histórico.
 
 Exemplo: abertura de1000,00 menos uma despesa efetivada de150,00 resulta em850,00.
-Planejar outra despesa de200,00 mantém o saldo real em850,00. Projeções de saldo,
-saldo consolidado e reservas ficam para depois. A criação de transferências está
+Planejar outra despesa de200,00 mantém o saldo real em850,00. Projeções de saldo
+e reservas ficam para depois. O saldo consolidado está descrito abaixo. A criação de transferências está
 disponível na API e interface descritas na seção específica abaixo.
 O cálculo já considera transferências persistidas pelo modelo, sem criá-las.
+
+### Saldo consolidado com filtro explícito
+
+A área **Saldos** soma as posições reais por conta na data informada. Escolha:
+
+- **Contas ativas atualmente:** padrão; usa o estado atual de ativação, inclusive
+  para uma data passada. Abrange todas as contas próprias ativas, sem limitar o
+  total à primeira página da lista de opções.
+- **Todas as contas, incluindo arquivadas:** conserva o patrimônio das contas
+  arquivadas na soma.
+- **Contas selecionadas:** de 1 a 100 contas próprias distintas, incluindo
+  arquivadas quando escolhidas. As opções são paginadas; carregue mais para
+  selecionar contas de outras páginas. Atualizar a lista limpa a seleção.
+
+Uma transferência entre duas contas incluídas se cancela no total. Se apenas um
+lado for incluído, o total filtrado muda pelo valor recebido ou enviado. Exemplo:
+duas contas com1000,00, transferência interna de500,00 e despesa de150,00 resultam
+em350,00 na origem e1500,00 no destino; o consolidado das duas é1850,00. Incluir
+somente a origem produz350,00. Planejados, lançamentos excluídos e efetivados
+posteriores à data consultada ficam fora desses saldos.
+
+O servidor exige uma data igual ou posterior à abertura de **todas** as contas
+incluídas. Se alguma ainda não existia nessa data, rejeita a consulta em vez de
+ignorar a conta ou inventar saldo zero. Use outra data ou a seleção manual.
+Quando o filtro válido não inclui conta alguma, retorna zero com contagem0;
+a tela informa explicitamente que nenhuma conta foi incluída. Falha de serviço
+não é mostrada como zero. Alterar data, filtro ou seleção oculta o resultado
+anterior; consultar novamente atualiza a posição.
+
+#### Contrato da API
+
+```text
+GET /api/v1/accounts/balances/consolidated?as_of=2026-01-04&scope=active
+GET /api/v1/accounts/balances/consolidated?as_of=2026-01-04&scope=all
+GET /api/v1/accounts/balances/consolidated?as_of=2026-01-04&scope=selected&account_id=<UUID4>&account_id=<UUID4>
+```
+
+`as_of` é obrigatório; `scope` aceita `active` (padrão), `all` ou `selected`.
+Somente `selected` aceita `account_id`, repetido uma vez por conta. A seleção
+precisa ter1–100UUIDv4 distintos. Datas, combinações, duplicatas ou limites
+inválidos retornam422. Conta alheia/inexistente em qualquer posição da seleção
+retorna o mesmo404 e invalida o pedido inteiro, sem soma parcial nem identificação
+de qual conta falhou. O proprietário é sempre derivado da sessão, sem `user_id`
+do cliente. Sessão inválida retorna401, limite429 e indisponibilidade503.
+
+Resposta de exemplo para o cenário fictício anterior:
+
+```json
+{
+  "as_of": "2026-01-04",
+  "scope": "active",
+  "currency": "BRL",
+  "account_ids": null,
+  "account_count": 2,
+  "balance": "1850.00"
+}
+```
+
+Em seleção manual, `account_ids` contém os UUIDs canônicos ordenados; nos outros
+filtros é `null`. O total é string decimal com duas casas. A resposta é compacta,
+com contagem e filtro, sem lista ilimitada de posições individuais. Usa cookies
+de sessão, autorização por usuário, rate limiting e `no-store`; erros não ecoam
+valores ou dados financeiros.
+
+O saldo individual e o consolidado compartilham o mesmo cálculo por conta.
+A soma, contagem e validação das aberturas são obtidas em **uma única consulta
+financeira SQL**, com snapshot consistente. Não há soma de respostas HTTP
+independentes, N+1, multiplicação por joins ou cálculo monetário com float.
+Autenticação pode executar suas consultas próprias antes dessa consulta de saldo.
+Transferências internas entram e saem no mesmo snapshot quando ambos os lados
+estão incluídos. A consulta não cria saldos persistidos ou altera movimentos.
+
+Sem migration ou dependência nova; o schema existente0011 continua compatível.
+Não há projeção de saldo ou gráfico/dashboard nesta entrega. O resultado é uma
+posição consultada: faça nova consulta para refletir mudanças posteriores.
 
 Referências inválidas/incompatíveis/inativas ou datas proibidas retornam422
 estático; consultas a recursos alheios e inexistentes retornam o mesmo404.

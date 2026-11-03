@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Response
-from pydantic import SecretStr
+from pydantic import UUID4, SecretStr
 
 from app.api.dependencies import get_session_service
 from app.api.financial_auth import creation_key
@@ -13,6 +13,7 @@ from app.api.financial_auth import financial_access as account_access
 from app.api.financial_auth import financial_mutation as category_mutation
 from app.schemas.transactions import (
     AccountBalanceResponse,
+    ConsolidatedBalanceResponse,
     TransactionCreatedResponse,
     TransactionInput,
     TransactionListResponse,
@@ -126,6 +127,17 @@ def delete_transaction(
 ):
     service.delete(token, transaction_id, etag)
     return Response(status_code=204)
+
+
+@balance_router.get("/balances/consolidated", response_model=ConsolidatedBalanceResponse)
+def get_consolidated_balance(
+    as_of: date,
+    token: Annotated[SecretStr, Depends(account_access)],
+    service: Annotated[TransactionService, Depends(transaction_service)],
+    scope: Literal["active", "all", "selected"] = "active",
+    account_id: Annotated[list[UUID4] | None, Query(max_length=100)] = None,
+):
+    return service.consolidated_balance(token, as_of=as_of, scope=scope, account_ids=account_id)
 
 
 @balance_router.get("/{account_id}/balance", response_model=AccountBalanceResponse)
