@@ -5,6 +5,7 @@ import { parseMoney, formatMoney, today } from '@/lib/money'
 
 export default function TransferForm({
   ownerId,
+  disabled = false,
   accounts,
   loading,
   intent,
@@ -33,7 +34,7 @@ export default function TransferForm({
   }, [])
 
   async function persist(pending) {
-    if (sending.current) return
+    if (sending.current || disabled) return
     sending.current = true
     onIntent({ ...pending, uncertain: true })
     onAttempt()
@@ -78,7 +79,7 @@ export default function TransferForm({
 
   function submit(event) {
     event.preventDefault()
-    if (sending.current || intent || loading) return
+    if (sending.current || intent || loading || disabled) return
     setError('')
     try {
       const money = parseMoney(amount)
@@ -125,7 +126,7 @@ export default function TransferForm({
         </p>
       )}
       <form onSubmit={submit} aria-label="Nova transferência">
-        <fieldset disabled={busy || loading || Boolean(intent)}>
+        <fieldset disabled={disabled || busy || loading || Boolean(intent)}>
           <legend className="sr-only">Dados da transferência</legend>
           <div className="field">
             <label htmlFor="transfer-from">Conta de origem</label>

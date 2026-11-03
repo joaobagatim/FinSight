@@ -1330,9 +1330,47 @@ transferência planejada fica fora do saldo real; não há efetivação automát
 Este cadastro registra uma movimentação no FinSight, sem enviar dinheiro a bancos.
 
 O histórico mostra nomes das contas, valor, data e situação, com paginação.
-Consulte o saldo de cada conta na data desejada. Edição, exclusão e efetivação
-de transferências planejadas ainda são fluxos separados; não estão disponíveis
-nesta entrega. Contas arquivadas preservam o histórico existente.
+Consulte o saldo de cada conta na data desejada. Transferências planejadas podem
+ser efetivadas por confirmação explícita, descrita abaixo. Edição e exclusão de
+transferências ainda não estão disponíveis. Contas arquivadas preservam o histórico.
+
+### Efetivar uma transferência planejada
+
+Use **Efetivar transferência** no histórico. A tela consulta o estado atual e
+mostra origem, destino, valor e data antes de **Confirmar efetivação**. A operação
+muda somente a situação na mesma linha: o valor passa a compor os dois saldos na
+data econômica original. Não troca a data por hoje, não cria outra transferência
+e não transforma o movimento em receita/despesa. Planejadas vencidas continuam
+planejadas até a confirmação. Valores com data posterior à consulta de saldo
+continuam fora dessa posição, mesmo após efetivar.
+
+`GET /api/v1/transfers/{id}` retorna `ETag`. Envie
+`POST /api/v1/transfers/{id}/post` com JSON `{}`, sessão viva, origem autorizada,
+CSRF e esse ETag em `If-Match`. A resposta200 contém a transferência e o novo
+ETag. Header ausente/inválido ou corpo extra retorna422, snapshot divergente412,
+recurso alheio/inexistente o mesmo404. Respostas usam `no-store`; CORS expõe ETag
+para as origens permitidas. Não é possível alterar valor, data ou contas no corpo.
+
+Usuário/sessão, transferência e duas contas são bloqueados na transação. A nova
+efetivação revalida contas próprias, distintas, ativas e BRL, com data posterior
+à abertura de ambas. Renomear uma conta durante a confirmação invalida o snapshot
+e exige nova revisão. A falha de commit preserva a situação planejada e os saldos.
+
+Repetir a confirmação do mesmo snapshot planejado, quando só a situação mudou,
+ou do snapshot efetivado atual retorna o registro já efetivado sem novo efeito.
+Isso também permite reconhecer o resultado depois de arquivar as contas. Outras
+mudanças na representação exigem releitura. O digest original da criação não é
+alterado: repetir a chave/corpo planejados retorna o mesmo ID já efetivado, sem
+restaurar a situação anterior. Não há reversão para planejada por esta operação.
+
+Conflito, rejeição ou resultado incerto bloqueiam outra confirmação até
+**Recarregar situação**. A leitura reconhece uma efetivação concluída sem enviar
+outro POST; se ainda planejada, exige conferir e confirmar novamente. O saldo
+anterior é ocultado, o histórico é atualizado e fechar devolve o foco ao título.
+Cadastro/paginação e outras confirmações ficam bloqueados enquanto o painel
+está aberto; uma criação pendente impede abrir nova confirmação. Não há novo
+storage, dependência, tabela ou migration. O destino mantém a exigência existente
+de revisão0011; startup não migra nem altera o banco pessoal automaticamente.
 
 ### Contrato e repetição segura
 
