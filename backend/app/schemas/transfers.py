@@ -60,6 +60,10 @@ class TransferInput(BaseModel):
         return format(value, ".2f")
 
 
+class TransferPostInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True, hide_input_in_errors=True)
+
+
 class TransferResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID

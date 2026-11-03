@@ -120,6 +120,38 @@ async function authenticatedRead(path) {
 }
 
 export const api = {
+  transfer: (ownerId, id) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/transfers/${encodeURIComponent(id)}`, { versioned: true })
+      if (result.data?.id !== id || !['planned', 'posted'].includes(result.data.status))
+        throw new ApiError(0)
+      return result
+    }),
+  postTransfer: (ownerId, id, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send(`/transfers/${encodeURIComponent(id)}/post`, {
+          method: 'POST',
+          data: {},
+          versioned: true,
+          headers: { 'If-Match': etag, 'X-CSRF-Token': await bootstrap() },
+        })
+        if (result.data?.id !== id || result.data.status !== 'posted') throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
   transfers: (ownerId, offset = 0) =>
     coordinated(async () => {
       const profile = await renewUnlocked()

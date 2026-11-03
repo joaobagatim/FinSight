@@ -46,7 +46,12 @@ from app.services.transactions import (
     TransactionRemoved,
     TransactionStale,
 )
-from app.services.transfers import TransferConflict, TransferNotFound, TransferRejected
+from app.services.transfers import (
+    TransferConflict,
+    TransferNotFound,
+    TransferRejected,
+    TransferStale,
+)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -142,6 +147,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.exception_handler(TransferConflict)
     async def transfer_conflict(_request, _error):
         return JSONResponse({"detail": "Idempotency key conflict"}, status_code=409)
+
+    @application.exception_handler(TransferStale)
+    async def transfer_stale(_request, _error):
+        return JSONResponse({"detail": "Transfer changed; reload before posting"}, status_code=412)
 
     @application.exception_handler(TransactionNotFound)
     async def transaction_not_found(_request, _error):

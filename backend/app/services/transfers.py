@@ -27,6 +27,15 @@ class TransferConflict(Exception):
     pass
 
 
+class TransferStale(Exception):
+    pass
+
+
+def transfer_etag(data: TransferResponse) -> str:
+    canonical = json.dumps(data.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return '"' + hashlib.sha256(canonical.encode()).hexdigest() + '"'
+
+
 class TransferService:
     def __init__(self, sessions: SessionService):
         self.sessions = sessions
@@ -82,6 +91,51 @@ class TransferService:
             if row is None:
                 raise TransferNotFound()
             result = TransferResponse.model_validate(row)
+        return result
+
+    def post(self, token: SecretStr, transfer_id: UUID, etag: str) -> TransferResponse:
+        with self.sessions.authorized_transaction(token, lock=True) as (session, owner):
+            row = session.scalar(
+                select(Transfer)
+                .where(Transfer.id == transfer_id, Transfer.user_id == owner.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if row is None:
+                raise TransferNotFound()
+            accounts = session.scalars(
+                select(Account)
+                .where(
+                    Account.user_id == owner.user_id,
+                    Account.id.in_([row.from_account_id, row.to_account_id]),
+                )
+                .order_by(Account.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).all()
+            if len(accounts) != 2:
+                raise TransferRejected()
+            current = TransferResponse.model_validate(row)
+            matches = hmac.compare_digest(transfer_etag(current), etag)
+            if row.status == "posted":
+                # Only the confirmed status transition may be acknowledged with its old snapshot.
+                planned = current.model_copy(update={"status": "planned"})
+                if not matches and not hmac.compare_digest(transfer_etag(planned), etag):
+                    raise TransferStale()
+                result = current
+            else:
+                if not matches:
+                    raise TransferStale()
+                if any(
+                    not account.is_active
+                    or account.currency != "BRL"
+                    or row.effective_date <= account.opening_date
+                    for account in accounts
+                ):
+                    raise TransferRejected()
+                row.status = "posted"
+                session.flush()
+                result = TransferResponse.model_validate(row)
         return result
 
     def list(
