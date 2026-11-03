@@ -1247,6 +1247,62 @@ banco pessoal. Remover a tabela técnica por downgrade perde a memória de repet
 embora preserve os lançamentos, e pode permitir duplicação após novas tentativas;
 não faça esse rollback num banco em uso sem um plano específico.
 
+### Simular saldo futuro
+
+Na área **Saldos**, altere **Tipo de consulta** para **Simular saldo futuro**.
+Escolha as contas, uma data-base (inicialmente o dia local de hoje), uma data
+estritamente posterior e como tratar os planejados vencidos antes da data-base.
+A simulação usa somente registros cadastrados e sua situação atual; não prevê
+movimentos desconhecidos nem garante saldo disponível. Uma data-base passada
+não reconstitui como os status dos registros estavam naquele dia.
+
+O resultado apresenta três parcelas e sua soma:
+
+```text
+saldo projetado = saldo efetivado na data-base
+                + efetivados após a base até a data futura
+                + planejados considerados até a data futura
+```
+
+Exemplo fictício: R$ 850,00 na base, R$ 100,00 de despesas já efetivadas com data
+futura e R$ 60,00 de despesas planejadas resultam em R$ 690,00. Considerar mais
+R$ 30,00 de planejados vencidos resulta em R$ 660,00. A consulta não efetiva
+movimentos; o saldo real na data futura continua em R$ 750,00 nesse exemplo.
+
+Não há política implícita para vencidos. **Desconsiderar** exclui planejados com
+data anterior à base; **incluir** considera todos os planejados elegíveis até a
+data futura. Planejados na própria data-base entram nas duas opções. Excluídos
+e movimentos posteriores à data futura ficam fora. Efetivados e planejados são
+parcelas distintas, evitando contar o mesmo movimento duas vezes. Transferências
+planejadas também se cancelam quando ambas as contas entram no filtro.
+
+```http
+GET /api/v1/accounts/balances/projected?base_date=2026-01-05&target_date=2026-01-10&overdue_policy=exclude&scope=active
+```
+
+Requer sessão própria e os três parâmetros `base_date`, `target_date` e
+`overdue_policy=include|exclude`. `scope` aceita `active` (padrão), `all` ou
+`selected`, com as mesmas regras do consolidado: somente `selected` aceita
+`account_id` repetido, com 1–100 UUIDs distintos. Ativas significa ativas
+atualmente, inclusive em simulações com datas passadas. Todas as contas
+incluídas precisam ter abertura até a data-base. Seleção parcialmente
+indisponível/alheia retorna 404 sem total parcial; datas, política ou filtros
+inválidos retornam 422.
+
+A resposta inclui datas, política, escopo, BRL, quantidade de contas, IDs quando
+selecionados e strings monetárias com duas casas: `base_balance`,
+`posted_future_delta`, `planned_delta` e `projected_balance`. Os componentes são
+calculados em uma única instrução SQL, usando Decimal/NUMERIC e o mesmo snapshot.
+Não há saldo persistido, efetivação automática, nova dependência ou migração.
+Consultas válidas sem contas mostram zero com essa condição explícita;
+indisponibilidade exibe erro sem fabricar saldo. Alterar filtros oculta a posição
+anterior. Nenhuma consulta aplica migrações ao banco pessoal.
+
+Os testes de navegador desta simulação ficam em
+`tests/auth-browser/projected-balance.spec.ts`; os cenários de API e cálculo ficam
+nos dois casos `test_projected_balance_*` de
+`backend/tests/integration/test_manual_transactions.py`.
+
 ### Usar a tela de lançamentos
 
 Depois de entrar, abra **Lançamentos**. Cadastre antes pelo menos uma conta ativa

@@ -120,6 +120,19 @@ async function authenticatedRead(path) {
 }
 
 export const api = {
+  projectedBalance: (ownerId, scope, baseDate, targetDate, overduePolicy, accountIds) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const query = new URLSearchParams({
+        scope,
+        base_date: baseDate,
+        target_date: targetDate,
+        overdue_policy: overduePolicy,
+      })
+      if (scope === 'selected') accountIds.forEach((id) => query.append('account_id', id))
+      return send(`/accounts/balances/projected?${query}`)
+    }),
   consolidatedBalance: (ownerId, scope, asOf, accountIds) =>
     coordinated(async () => {
       const profile = await renewUnlocked()

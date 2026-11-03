@@ -14,6 +14,7 @@ from app.api.financial_auth import financial_mutation as category_mutation
 from app.schemas.transactions import (
     AccountBalanceResponse,
     ConsolidatedBalanceResponse,
+    ProjectedBalanceResponse,
     TransactionCreatedResponse,
     TransactionInput,
     TransactionListResponse,
@@ -138,6 +139,26 @@ def get_consolidated_balance(
     account_id: Annotated[list[UUID4] | None, Query(max_length=100)] = None,
 ):
     return service.consolidated_balance(token, as_of=as_of, scope=scope, account_ids=account_id)
+
+
+@balance_router.get("/balances/projected", response_model=ProjectedBalanceResponse)
+def get_projected_balance(
+    base_date: date,
+    target_date: date,
+    overdue_policy: Literal["include", "exclude"],
+    token: Annotated[SecretStr, Depends(account_access)],
+    service: Annotated[TransactionService, Depends(transaction_service)],
+    scope: Literal["active", "all", "selected"] = "active",
+    account_id: Annotated[list[UUID4] | None, Query(max_length=100)] = None,
+):
+    return service.projected_balance(
+        token,
+        base_date=base_date,
+        target_date=target_date,
+        overdue_policy=overdue_policy,
+        scope=scope,
+        account_ids=account_id,
+    )
 
 
 @balance_router.get("/{account_id}/balance", response_model=AccountBalanceResponse)

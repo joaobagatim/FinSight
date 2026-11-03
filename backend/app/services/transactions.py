@@ -16,6 +16,7 @@ from app.models import Account, Category, Transaction, TransactionCreationReques
 from app.schemas.transactions import (
     AccountBalanceResponse,
     ConsolidatedBalanceResponse,
+    ProjectedBalanceResponse,
     TransactionInput,
     TransactionListResponse,
     TransactionResponse,
@@ -50,7 +51,10 @@ def transaction_etag(data: TransactionResponse) -> str:
     return '"' + hashlib.sha256(canonical.encode()).hexdigest() + '"'
 
 
-def account_balance_query(user_id: UUID, as_of: date):
+def account_balance_query(
+    user_id: UUID, as_of: date, *, status: str = "posted", from_date: date | None = None
+):
+    """Opening plus signed movements; planned callers must subtract the opening."""
     movements = (
         select(
             func.coalesce(
@@ -66,10 +70,11 @@ def account_balance_query(user_id: UUID, as_of: date):
         .where(
             Transaction.user_id == user_id,
             Transaction.account_id == Account.id,
-            Transaction.status == "posted",
+            Transaction.status == status,
             Transaction.deleted_at.is_(None),
             Transaction.effective_date > Account.opening_date,
             Transaction.effective_date <= as_of,
+            *([Transaction.effective_date >= from_date] if from_date is not None else []),
         )
         .correlate(Account)
         .scalar_subquery()
@@ -88,10 +93,11 @@ def account_balance_query(user_id: UUID, as_of: date):
         )
         .where(
             Transfer.user_id == user_id,
-            Transfer.status == "posted",
+            Transfer.status == status,
             or_(Transfer.to_account_id == Account.id, Transfer.from_account_id == Account.id),
             Transfer.effective_date > Account.opening_date,
             Transfer.effective_date <= as_of,
+            *([Transfer.effective_date >= from_date] if from_date is not None else []),
         )
         .correlate(Account)
         .scalar_subquery()
@@ -201,6 +207,86 @@ class TransactionService:
                 limit=limit,
                 offset=offset,
                 has_more=len(rows) > limit,
+            )
+        return result
+
+    def projected_balance(
+        self,
+        token: SecretStr,
+        *,
+        base_date: date,
+        target_date: date,
+        overdue_policy: str,
+        scope: str,
+        account_ids: list[UUID] | None,
+    ):
+        selected = account_ids or []
+        if (
+            target_date <= base_date
+            or overdue_policy not in {"include", "exclude"}
+            or scope not in {"active", "all", "selected"}
+            or (
+                scope == "selected"
+                and (not selected or len(selected) > 100 or len(set(selected)) != len(selected))
+            )
+            or (scope != "selected" and selected)
+        ):
+            raise TransactionRejected()
+        with self.sessions.authorized_transaction(token) as (session, owner):
+            query = account_balance_query(owner.user_id, base_date)
+            if scope == "active":
+                query = query.where(Account.is_active.is_(True))
+            elif scope == "selected":
+                query = query.where(Account.id.in_(selected))
+            base = query.cte("projection_base")
+            included = select(base.c.id)
+            future = (
+                account_balance_query(owner.user_id, target_date)
+                .where(Account.id.in_(included))
+                .cte("projection_future")
+            )
+            planned = (
+                account_balance_query(
+                    owner.user_id,
+                    target_date,
+                    status="planned",
+                    from_date=base_date if overdue_policy == "exclude" else None,
+                )
+                .where(Account.id.in_(included))
+                .cte("projection_planned")
+            )
+            # One statement/snapshot for every component; each CTE has one row per account.
+            row = session.execute(
+                select(
+                    func.count(base.c.id).label("account_count"),
+                    func.max(base.c.opening_date).label("newest_opening"),
+                    func.coalesce(func.sum(base.c.balance), 0).label("base_balance"),
+                    func.coalesce(func.sum(future.c.balance - base.c.balance), 0).label(
+                        "posted_future_delta"
+                    ),
+                    func.coalesce(func.sum(planned.c.balance - planned.c.opening_balance), 0).label(
+                        "planned_delta"
+                    ),
+                )
+                .select_from(base)
+                .join(future, future.c.id == base.c.id)
+                .join(planned, planned.c.id == base.c.id)
+            ).one()
+            if scope == "selected" and row.account_count != len(selected):
+                raise AccountNotFound()
+            if row.newest_opening is not None and base_date < row.newest_opening:
+                raise TransactionRejected()
+            result = ProjectedBalanceResponse(
+                base_date=base_date,
+                target_date=target_date,
+                overdue_policy=overdue_policy,
+                scope=scope,
+                account_ids=sorted(selected, key=str) if scope == "selected" else None,
+                account_count=row.account_count,
+                base_balance=row.base_balance,
+                posted_future_delta=row.posted_future_delta,
+                planned_delta=row.planned_delta,
+                projected_balance=row.base_balance + row.posted_future_delta + row.planned_delta,
             )
         return result
 

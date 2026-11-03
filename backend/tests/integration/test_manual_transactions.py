@@ -1564,3 +1564,182 @@ def test_consolidated_balance_rejects_partial_foreign_selections_and_handles_emp
             client.get(path, params={"as_of": "2026-01-04", "scope": "all"}).json()["balance"]
             == "1000.00"
         )
+
+
+def test_projected_balance_separates_posted_planned_and_overdue_without_mutation(
+    context, transfer_resources, deletion_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransactionService(sessions)
+    ids = []
+    for amount, day, status in (
+        ("150.00", "2026-01-04", "posted"),
+        ("100.00", "2026-01-08", "posted"),
+        ("30.00", "2026-01-04", "planned"),
+        ("10.00", "2026-01-05", "planned"),
+        ("50.00", "2026-01-10", "planned"),
+        ("999.00", "2026-01-11", "planned"),
+    ):
+        ids.append(
+            service.create(
+                token,
+                uuid4(),
+                TransactionInput(**body(own, amount=amount, effective_date=day, status=status)),
+            )
+        )
+    service.create(
+        token,
+        uuid4(),
+        TransactionInput(
+            **body(
+                own,
+                type="income",
+                category_id=str(own["income"]),
+                amount="200.10",
+                effective_date="2026-01-10",
+                status="planned",
+            )
+        ),
+    )
+    removed = service.create(
+        token,
+        uuid4(),
+        TransactionInput(
+            **body(own, amount="999.00", effective_date="2026-01-08", status="planned")
+        ),
+    )
+    service.delete(token, removed, transaction_etag(service.get(token, removed)))
+    transfers = TransferService(sessions)
+    transfer_id = transfers.create(
+        token,
+        uuid4(),
+        TransferInput(**transfer_body(own, status="planned", effective_date="2026-01-10")),
+    )
+    transfers.create(
+        token,
+        uuid4(),
+        TransferInput(
+            **transfer_body(own, amount="20.00", status="planned", effective_date="2026-01-04")
+        ),
+    )
+    stack, make = clients(context)
+    with stack:
+        client = make(emails[0])
+        path = "/api/v1/accounts/balances/projected"
+        params = {
+            "base_date": "2026-01-05",
+            "target_date": "2026-01-10",
+            "overdue_policy": "exclude",
+        }
+        response = client.get(path, params=params)
+        assert response.status_code == 200 and response.json() == {
+            **params,
+            "scope": "active",
+            "currency": "BRL",
+            "account_ids": None,
+            "account_count": 2,
+            "base_balance": "1850.00",
+            "posted_future_delta": "-100.00",
+            "planned_delta": "140.10",
+            "projected_balance": "1890.10",
+        }
+        assert response.headers["cache-control"] == "no-store"
+        assert (
+            client.get(path, params=params | {"overdue_policy": "include"}).json()[
+                "projected_balance"
+            ]
+            == "1860.10"
+        )
+        for account, expected in ((own["account"], "390.10"), (own["target"], "1500.00")):
+            selected = client.get(
+                path, params=params | {"scope": "selected", "account_id": str(account)}
+            )
+            assert selected.status_code == 200 and selected.json()["projected_balance"] == expected
+        with database.sessions.begin() as session:
+            session.get(Account, own["target"]).is_active = False
+        assert client.get(path, params=params).json()["projected_balance"] == "390.10"
+        assert (
+            client.get(path, params=params | {"scope": "all"}).json()["projected_balance"]
+            == "1890.10"
+        )
+        assert (
+            client.get(
+                path, params=params | {"base_date": "2026-01-02", "scope": "all"}
+            ).status_code
+            == 422
+        )
+    with database.sessions() as session:
+        assert [session.get(Transaction, value).status for value in ids] == [
+            "posted",
+            "posted",
+            "planned",
+            "planned",
+            "planned",
+            "planned",
+        ]
+        assert session.get(Transfer, transfer_id).status == "planned"
+    assert service.balance(token, own["account"], date(2026, 1, 10)).balance == Decimal("750.00")
+
+
+def test_projected_balance_rejects_partial_selection_invalid_assumptions_and_missing_session(
+    context, resources
+):
+    stack, make = clients(context)
+    with stack:
+        client, anonymous = make(context[3][0]), make()
+        own, foreign = resources
+        path = "/api/v1/accounts/balances/projected"
+        params = {
+            "base_date": "2026-01-05",
+            "target_date": "2026-01-10",
+            "overdue_policy": "exclude",
+        }
+        assert anonymous.get(path, params=params).status_code == 401
+        for invalid in (foreign["account"], uuid4()):
+            response = client.get(
+                path,
+                params=params
+                | {"scope": "selected", "account_id": [str(own["account"]), str(invalid)]},
+            )
+            assert response.status_code == 404 and response.json() == {
+                "detail": "Account not found"
+            }
+        for field in params:
+            assert (
+                client.get(
+                    path, params={key: value for key, value in params.items() if key != field}
+                ).status_code
+                == 422
+            )
+        for changes in (
+            {"target_date": "2026-01-05"},
+            {"target_date": "2026-01-04"},
+            {"target_date": "2026-02-30"},
+            {"base_date": "2025-12-31"},
+            {"overdue_policy": "automatic"},
+            {"scope": "selected"},
+            {"scope": "unknown"},
+            {"account_id": str(own["account"])},
+            {"scope": "selected", "account_id": [str(own["account"])] * 2},
+            {"scope": "selected", "account_id": [str(uuid4()) for _ in range(101)]},
+        ):
+            assert client.get(path, params=params | changes).status_code == 422
+        with context[0].sessions.begin() as session:
+            session.get(Account, own["account"]).is_active = False
+        empty = client.get(path, params=params)
+        assert empty.status_code == 200 and empty.json()["account_count"] == 0
+        assert all(
+            empty.json()[field] == "0.00"
+            for field in (
+                "base_balance",
+                "posted_future_delta",
+                "planned_delta",
+                "projected_balance",
+            )
+        )
+        assert (
+            client.get(path, params=params | {"scope": "all"}).json()["projected_balance"]
+            == "1000.00"
+        )
