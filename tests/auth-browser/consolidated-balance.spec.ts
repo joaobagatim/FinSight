@@ -98,6 +98,8 @@ test('consolidated filters explain archived accounts and conserve internal trans
   await page.setViewportSize({ width: 320, height: 900 })
   const data = await seed(await playwright.request.newContext({ baseURL: base }))
   await enter(page, data.email)
+  // Larger base text exercises wrapping across different system fonts at 320px.
+  await page.addStyleTag({ content: 'html { font-size: 18px; }' })
   await page.getByLabel('Consolidado até a data').fill('2026-01-04')
   await consult(page, 'R$ 1.850,00')
   await expect(page.locator('.consolidated-result')).toContainText('2 conta(s)')

@@ -701,3 +701,11 @@ fieldset {
 .consolidated-result {
   overflow-wrap: anywhere;
 }
+
+.consolidated-panel button {
+  max-width: 100%;
+  min-height: 44px;
+  height: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
