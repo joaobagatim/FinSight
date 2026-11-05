@@ -58,6 +58,7 @@ def list_transactions(
     status: Literal["planned", "posted"] | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    q: Annotated[str | None, Query(min_length=1, max_length=255)] = None,
 ):
     return service.list(
         token,
@@ -69,6 +70,7 @@ def list_transactions(
         status=status,
         date_from=date_from,
         date_to=date_to,
+        search=q,
     )
 
 

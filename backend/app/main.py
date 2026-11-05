@@ -17,6 +17,7 @@ from app.api.transactions import balance_router
 from app.api.transactions import router as transactions_router
 from app.api.transfers import router as transfers_router
 from app.api.users import router as users_router
+from app.core.access_logging import install_access_log_privacy
 from app.core.auth_cookies import CookiePolicyRejected
 from app.core.config import Settings
 from app.core.csrf import CsrfConfigurationError, CsrfRejected
@@ -55,6 +56,7 @@ from app.services.transfers import (
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    install_access_log_privacy()
     settings = settings if settings is not None else Settings()
     limits = RegistrationLimits(settings)
     session_limits = SessionHttpLimits(settings)
