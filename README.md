@@ -1303,6 +1303,44 @@ Os testes de navegador desta simulação ficam em
 nos dois casos `test_projected_balance_*` de
 `backend/tests/integration/test_manual_transactions.py`.
 
+### Filtrar e pesquisar lançamentos
+
+Em **Lançamentos**, use **Filtros e pesquisa** para combinar conta, categoria,
+receita/despesa, situação planejada/efetivada e intervalo de datas inclusivo.
+**Pesquisar na descrição** procura um trecho literal, sem diferenciar maiúsculas
+e minúsculas; considera acentos e sinais como escritos. `%` e `_` não são curingas.
+O limite é de 255 caracteres; espaços nas extremidades são removidos.
+
+**Aplicar filtros** inicia uma consulta na primeira página. **Carregar mais
+lançamentos** mantém os mesmos filtros. **Limpar filtros** retorna ao histórico
+completo a partir da primeira página. Alterar campos oculta resultados anteriores
+até aplicar a nova consulta. As opções incluem contas arquivadas e categorias
+desativadas, preservando o acesso ao histórico; carregue mais opções quando houver
+ou atualize as listas pelos botões do formulário.
+
+Uma lista vazia após sucesso significa que nenhum registro atende aos filtros;
+indisponibilidade mostra erro. Efetivar, editar ou excluir refaz a consulta com o
+filtro aplicado, reiniciando a paginação. Criar um movimento também atualiza essa
+consulta. Filtros do histórico não alteram a consulta separada de saldo.
+
+```http
+GET /api/v1/transactions?q=mercado&status=posted&type=expense&date_from=2026-01-01&date_to=2026-01-31&limit=50&offset=0
+```
+
+Os parâmetros opcionais `account_id`, `category_id`, `type`, `status`, `date_from`
+e `date_to` continuam disponíveis; `q` acrescenta a pesquisa por descrição. Os
+filtros são combinados e sempre delimitados pelo usuário da sessão. IDs de outro
+usuário não fornecem acesso. Registros excluídos ficam fora. Consulta com `q`
+vazio, somente espaços, caracteres de controle ou mais de 255 caracteres retorna
+422; omitir `q` preserva o comportamento anterior. Datas invertidas também retornam
+422. A API mantém paginação e respostas `no-store`, sem mudança de schema.
+
+A aplicação remove a query string dos logs de acesso padrão do Uvicorn, mantendo
+método, caminho e status. Formatos de log desconhecidos são suprimidos. A pesquisa
+é mantida apenas em memória na interface. Na configuração de proxies, APM e outros
+servidores HTTP, registre somente o caminho, sem argumentos da URL ou corpo da
+requisição: a descrição pesquisada pode conter informação financeira privada.
+
 ### Usar a tela de lançamentos
 
 Depois de entrar, abra **Lançamentos**. Cadastre antes pelo menos uma conta ativa

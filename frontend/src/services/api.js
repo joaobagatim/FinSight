@@ -283,11 +283,23 @@ export const api = {
         return submit()
       }
     }),
-  transactions: (ownerId, offset = 0) =>
+  transactions: (ownerId, offset = 0, filters = {}) =>
     coordinated(async () => {
       const profile = await renewUnlocked()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/transactions?limit=50&offset=${offset}`)
+      const query = new URLSearchParams({ limit: '50', offset: String(offset) })
+      for (const field of [
+        'account_id',
+        'category_id',
+        'type',
+        'status',
+        'date_from',
+        'date_to',
+        'q',
+      ]) {
+        if (filters[field]) query.set(field, filters[field])
+      }
+      const result = await send(`/transactions?${query}`)
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
     }),
