@@ -33,7 +33,7 @@ from app.models import (
     User,
 )
 from app.schemas.transactions import TransactionInput, TransactionUpdateInput
-from app.schemas.transfers import TransferInput
+from app.schemas.transfers import TransferInput, TransferUpdateInput
 from app.services.sessions import AuthenticationDenied, SessionService, SessionUnavailable
 from app.services.transactions import (
     TransactionRejected,
@@ -1517,6 +1517,169 @@ def test_transfer_posting_concurrency_rollback_revocation_and_archived_replay(
     sessions.revoke_by_access(token)
     with pytest.raises(AuthenticationDenied):
         service.post(token, second_id, transfer_etag(second))
+
+
+def test_transfer_edit_http_is_conditional_owned_and_updates_one_atomic_transfer(
+    context, transfer_resources
+):
+    database, sessions, _, emails = context
+    own, foreign = transfer_resources
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service, balances = TransferService(sessions), TransactionService(sessions)
+    key, original = uuid4(), TransferInput(**transfer_body(own))
+    transfer_id = service.create(token, key, original)
+    stack, make = clients(context)
+    with stack:
+        client, other, anonymous = make(emails[0]), make(emails[1]), make()
+        path = f"/api/v1/transfers/{transfer_id}"
+        before = client.get(path)
+        headers = {
+            "Origin": ORIGIN,
+            "X-CSRF-Token": client.cookies.get("__Host-finsight-csrf"),
+            "If-Match": before.headers["etag"],
+        }
+        assert anonymous.patch(path, json={"amount": "250.10"}).status_code in (401, 403)
+        assert client.patch(path, json={"amount": "250.10"}).status_code == 403
+        assert (
+            client.patch(
+                path,
+                json={"amount": "250.10"},
+                headers={key: value for key, value in headers.items() if key != "If-Match"},
+            ).status_code
+            == 422
+        )
+        other_headers = {**headers, "X-CSRF-Token": other.cookies.get("__Host-finsight-csrf")}
+        assert (
+            other.patch(path, json={"amount": "250.10"}, headers=other_headers).status_code == 404
+        )
+        for changes in (
+            {"from_account_id": str(foreign["account"])},
+            {"to_account_id": str(own["account"])},
+            {"effective_date": "2026-01-03"},
+            {"status": "planned"},
+            {"amount": 1.2},
+            {},
+        ):
+            assert client.patch(path, json=changes, headers=headers).status_code == 422
+        updated = client.patch(
+            path, json={"amount": "250.10", "description": "Updated transfer"}, headers=headers
+        )
+        assert updated.status_code == 200 and updated.json()["id"] == str(transfer_id)
+        assert updated.json()["status"] == "posted" and updated.json()["amount"] == "250.10"
+        assert updated.headers["etag"] != headers["If-Match"]
+        assert client.patch(path, json={"amount": "300.00"}, headers=headers).status_code == 412
+        assert balances.balance(token, own["account"], date(2026, 1, 4)).balance == Decimal(
+            "749.90"
+        )
+        assert balances.balance(token, own["target"], date(2026, 1, 4)).balance == Decimal(
+            "1250.10"
+        )
+        # Switch both sides and date together; old legs disappear in the same row update.
+        switched = client.patch(
+            path,
+            json={
+                "from_account_id": str(own["target"]),
+                "to_account_id": str(own["account"]),
+                "effective_date": "2026-01-05",
+                "description": None,
+            },
+            headers={**headers, "If-Match": updated.headers["etag"]},
+        )
+        assert switched.status_code == 200 and switched.json()["description"] is None
+        assert balances.balance(token, own["account"], date(2026, 1, 4)).balance == Decimal(
+            "1000.00"
+        )
+        assert balances.balance(token, own["account"], date(2026, 1, 5)).balance == Decimal(
+            "1250.10"
+        )
+        assert balances.balance(token, own["target"], date(2026, 1, 5)).balance == Decimal("749.90")
+        assert service.create(token, key, original) == transfer_id
+        assert client.get(path).json() == switched.json()
+        assert (
+            client.options(
+                path,
+                headers={
+                    "Origin": ORIGIN,
+                    "Access-Control-Request-Method": "PATCH",
+                    "Access-Control-Request-Headers": "if-match,x-csrf-token",
+                },
+            ).status_code
+            == 200
+        )
+    with database.sessions() as session:
+        assert (
+            session.scalar(
+                select(func.count()).select_from(Transfer).where(Transfer.user_id == own["owner"])
+            )
+            == 1
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(Transaction)
+                .where(Transaction.user_id == own["owner"])
+            )
+            == 0
+        )
+
+
+def test_transfer_edits_race_rollback_archive_and_revocation_preserve_financial_integrity(
+    context, transfer_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransferService(sessions)
+    transfer_id = service.create(
+        token, uuid4(), TransferInput(**transfer_body(own, status="planned"))
+    )
+    snapshot = service.get(token, transfer_id)
+    etag = transfer_etag(snapshot)
+    barrier = Barrier(2)
+
+    def update_amount(amount):
+        barrier.wait(timeout=10)
+        try:
+            service.update(token, transfer_id, TransferUpdateInput(amount=amount), etag)
+            return "saved"
+        except TransferStale:
+            return "stale"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = [executor.submit(update_amount, amount) for amount in ("100.10", "200.20")]
+        assert sorted(future.result(timeout=20) for future in outcomes) == ["saved", "stale"]
+    current = service.get(token, transfer_id)
+    assert current.status == "planned"
+    assert TransactionService(sessions).balance(
+        token, own["account"], date(2026, 1, 4)
+    ).balance == Decimal("1000.00")
+
+    def fail(_session):
+        raise SQLAlchemyError("synthetic transfer edit failure")
+
+    event.listen(database.sessions.class_, "before_commit", fail)
+    try:
+        with pytest.raises(SessionUnavailable):
+            service.update(
+                token, transfer_id, TransferUpdateInput(amount="300.00"), transfer_etag(current)
+            )
+    finally:
+        event.remove(database.sessions.class_, "before_commit", fail)
+    assert service.get(token, transfer_id) == current
+    with database.sessions.begin() as session:
+        session.get(Account, own["target"]).is_active = False
+    with pytest.raises(TransferRejected):
+        service.update(
+            token,
+            transfer_id,
+            TransferUpdateInput(description="Archived"),
+            transfer_etag(service.get(token, transfer_id)),
+        )
+    sessions.revoke_by_access(token)
+    with pytest.raises(AuthenticationDenied):
+        service.update(
+            token, transfer_id, TransferUpdateInput(amount="300.00"), transfer_etag(current)
+        )
 
 
 def test_balance_history_has_exact_daily_closings_and_preserves_archived_history(

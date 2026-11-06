@@ -785,3 +785,14 @@ fieldset {
   text-align: left;
   margin-bottom: 0.5rem;
 }
+
+.transfer-edit-panel button {
+  max-width: 100%;
+  min-height: 44px;
+  height: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.transfer-edit-panel .field {
+  min-width: 0;
+}
