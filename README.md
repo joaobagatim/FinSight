@@ -1303,6 +1303,48 @@ Os testes de navegador desta simulação ficam em
 nos dois casos `test_projected_balance_*` de
 `backend/tests/integration/test_manual_transactions.py`.
 
+### Evolução diária do saldo
+
+Em **Saldos**, a seção **Evolução do saldo** consulta uma conta própria, inclusive
+arquivada, por um período de 1 a 93 dias. As duas datas entram no resultado; o
+início deve ser igual ou posterior à abertura da conta. Cada ponto representa a
+posição ao final do dia. Dias sem movimentos repetem a última posição.
+
+O cálculo inclui saldo inicial, receitas/despesas e transferências registrados
+como efetivados. Planejados e lançamentos excluídos ficam fora. Um período menor
+começa com o saldo efetivado da sua primeira data, incluindo movimentos anteriores,
+e não reaplica a abertura. Se escolher datas futuras, somente os efetivados já
+cadastrados para essas datas entram; não se trata de uma projeção de planejados.
+
+```http
+GET /api/v1/accounts/UUID-DA-CONTA/balance/history?date_from=2026-01-01&date_to=2026-01-31
+```
+
+A rota exige sessão e conta do próprio usuário. Conta ausente/alheia retorna o
+mesmo 404. Datas inválidas, invertidas, anteriores à abertura ou mais de 93 dias
+retornam 422. A resposta `no-store` contém `account_id`, `account_name`,
+`opening_date`, `date_from`, `date_to`, `currency=BRL` e `points`, com `date` e
+`balance` em cada dia; valores monetários são strings com duas casas.
+
+Uma única instrução SQL combina a posição efetivada inicial, movimentos diários
+e soma acumulada no mesmo snapshot. Datas são dias civis; valores usam
+Decimal/NUMERIC. Não há nova tabela, saldo persistido ou migração. A consulta usa
+os registros atuais, sem reconstituir versões históricas de lançamentos editados.
+
+O gráfico Recharts é carregado quando há resultado. Seu eixo vertical é ajustado
+ao mínimo/máximo informados. A posição visual usa uma razão limitada calculada
+com inteiros `BigInt`; os valores monetários originais não são convertidos para
+ponto flutuante. Tooltip e tabela apresentam as strings exatas. A tabela de
+valores diários é a alternativa acessível ao desenho e continua disponível se o
+arquivo do gráfico não carregar. Alterar conta/datas oculta o resultado anterior;
+erro ou resposta incompleta não vira saldo zero.
+
+Dependências de gráfico: Recharts 3.10.1 e react-is 19.3.1, com versões e lockfile
+fixados. Os testes de calendário e posições são executados com
+`npm --prefix frontend run test:unit` e no CI. O teste de navegador está em
+`tests/auth-browser/balance-history.spec.ts`; os dois casos de cálculo/API estão
+em `backend/tests/integration/test_manual_transactions.py` (`test_balance_history_*`).
+
 ### Filtrar e pesquisar lançamentos
 
 Em **Lançamentos**, use **Filtros e pesquisa** para combinar conta, categoria,

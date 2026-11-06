@@ -737,3 +737,51 @@ fieldset {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+.balance-panels {
+  display: grid;
+  gap: 2rem;
+  min-width: 0;
+}
+.balance-history-panel {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.balance-history-panel button {
+  max-width: 100%;
+  min-height: 44px;
+  height: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.history-chart {
+  width: 100%;
+  height: 260px;
+  min-width: 0;
+  margin-block: 1rem;
+}
+.history-tooltip {
+  padding: 0.75rem;
+  font-size: 0.875rem;
+}
+.balance-history-result {
+  margin-top: 1.5rem;
+}
+.balance-history-result table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  margin-top: 1rem;
+  font-size: 0.875rem;
+}
+.balance-history-result th,
+.balance-history-result td {
+  padding: 0.75rem 0.4rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.balance-history-result caption {
+  text-align: left;
+  margin-bottom: 0.5rem;
+}

@@ -120,6 +120,13 @@ async function authenticatedRead(path) {
 }
 
 export const api = {
+  balanceHistory: (ownerId, accountId, dateFrom, dateTo) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const query = new URLSearchParams({ date_from: dateFrom, date_to: dateTo })
+      return send(`/accounts/${encodeURIComponent(accountId)}/balance/history?${query}`)
+    }),
   projectedBalance: (ownerId, scope, baseDate, targetDate, overduePolicy, accountIds) =>
     coordinated(async () => {
       const profile = await renewUnlocked()
