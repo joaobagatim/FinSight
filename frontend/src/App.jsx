@@ -5,7 +5,7 @@ import AccountsPanel from './components/AccountsPanel.jsx'
 import CategoriesPanel from './components/CategoriesPanel.jsx'
 import TransactionsPanel from './components/TransactionsPanel.jsx'
 import TransfersPanel from './components/TransfersPanel.jsx'
-import ConsolidatedBalancePanel from './components/ConsolidatedBalancePanel.jsx'
+import BalancesPanel from './components/BalancesPanel.jsx'
 import { api, errorMessage, watchSessionChanges } from '@/services/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -220,7 +220,7 @@ export default function App() {
               ) : view === 'categories' ? (
                 <CategoriesPanel key={user.id} ownerId={user.id} onExpired={expired} />
               ) : view === 'balances' ? (
-                <ConsolidatedBalancePanel key={user.id} ownerId={user.id} onExpired={expired} />
+                <BalancesPanel key={user.id} ownerId={user.id} onExpired={expired} />
               ) : view === 'transfers' ? (
                 <TransfersPanel
                   key={user.id}

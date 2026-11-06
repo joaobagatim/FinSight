@@ -10,12 +10,26 @@ from unicodedata import category as unicode_category
 from uuid import UUID
 
 from pydantic import SecretStr
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import (
+    Date,
+    DateTime,
+    case,
+    cast,
+    func,
+    literal,
+    literal_column,
+    or_,
+    select,
+    true,
+    union_all,
+)
 from sqlalchemy.orm import joinedload
 
 from app.models import Account, Category, Transaction, TransactionCreationRequest, Transfer
 from app.schemas.transactions import (
     AccountBalanceResponse,
+    BalanceHistoryPoint,
+    BalanceHistoryResponse,
     ConsolidatedBalanceResponse,
     ProjectedBalanceResponse,
     TransactionInput,
@@ -452,6 +466,99 @@ class TransactionService:
                 opening_date=row.opening_date,
                 opening_balance=row.opening_balance,
                 balance=row.balance,
+            )
+        return result
+
+    def balance_history(
+        self, token: SecretStr, account_id: UUID, *, date_from: date, date_to: date
+    ):
+        if date_to < date_from or (date_to - date_from).days >= 93:
+            raise TransactionRejected()
+        with self.sessions.authorized_transaction(token) as (session, owner):
+            base = (
+                account_balance_query(owner.user_id, date_from)
+                .where(Account.id == account_id)
+                .add_columns(Account.name.label("account_name"))
+                .cte("history_base")
+            )
+            events = union_all(
+                select(
+                    Transaction.effective_date.label("day"),
+                    case(
+                        (Transaction.type == "income", Transaction.amount),
+                        else_=-Transaction.amount,
+                    ).label("amount"),
+                ).where(
+                    Transaction.user_id == owner.user_id,
+                    Transaction.account_id == account_id,
+                    Transaction.status == "posted",
+                    Transaction.deleted_at.is_(None),
+                    Transaction.effective_date > date_from,
+                    Transaction.effective_date <= date_to,
+                ),
+                select(
+                    Transfer.effective_date.label("day"),
+                    case(
+                        (Transfer.to_account_id == account_id, Transfer.amount),
+                        else_=-Transfer.amount,
+                    ).label("amount"),
+                ).where(
+                    Transfer.user_id == owner.user_id,
+                    Transfer.status == "posted",
+                    or_(
+                        Transfer.from_account_id == account_id, Transfer.to_account_id == account_id
+                    ),
+                    Transfer.effective_date > date_from,
+                    Transfer.effective_date <= date_to,
+                ),
+            ).cte("history_events")
+            daily = (
+                select(events.c.day, func.sum(events.c.amount).label("amount"))
+                .group_by(events.c.day)
+                .cte("history_daily")
+            )
+            days = (
+                func.generate_series(
+                    cast(literal(date_from), DateTime()),
+                    cast(literal(date_to), DateTime()),
+                    literal_column("interval '1 day'"),
+                )
+                .table_valued("day")
+                .render_derived("history_days")
+            )
+            point_date = cast(days.c.day, Date)
+            # One financial statement: exact baseline plus daily deltas in the same snapshot.
+            rows = session.execute(
+                select(
+                    base.c.id,
+                    base.c.account_name,
+                    base.c.opening_date,
+                    point_date.label("point_date"),
+                    (
+                        base.c.balance
+                        + func.sum(func.coalesce(daily.c.amount, 0)).over(
+                            order_by=point_date, rows=(None, 0)
+                        )
+                    ).label("balance"),
+                )
+                .select_from(base)
+                .join(days, true())
+                .outerjoin(daily, daily.c.day == point_date)
+                .order_by(point_date)
+            ).all()
+            if not rows:
+                raise AccountNotFound()
+            if date_from < rows[0].opening_date:
+                raise TransactionRejected()
+            result = BalanceHistoryResponse(
+                account_id=rows[0].id,
+                account_name=rows[0].account_name,
+                opening_date=rows[0].opening_date,
+                date_from=date_from,
+                date_to=date_to,
+                points=[
+                    BalanceHistoryPoint(date=row.point_date, balance=row.balance) for row in rows
+                ],
             )
         return result
 

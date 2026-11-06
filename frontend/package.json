@@ -14,7 +14,8 @@
     "preview": "vite preview",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test:unit": "node --test src/lib/balance-history.test.js"
   },
   "dependencies": {
     "@radix-ui/react-slot": "1.5.0",
@@ -22,6 +23,8 @@
     "clsx": "2.1.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "react-is": "19.3.1",
+    "recharts": "3.10.1",
     "tailwind-merge": "3.7.0"
   },
   "devDependencies": {
