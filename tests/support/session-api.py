@@ -48,6 +48,10 @@ def run():
     finally:
         database.dispose()
     application = create_app(settings)
+    # All E2E scenarios share one synthetic loopback client within a minute.
+    # Change only this owned test instance; real configuration/validation stay unchanged.
+    # Dedicated limiter tests create separate apps with their own explicit budgets.
+    application.state.session_limits.rate = 5000
 
     @application.middleware("http")
     async def mark_owned_readiness(request, call_next):

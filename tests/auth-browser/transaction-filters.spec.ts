@@ -125,7 +125,14 @@ test('combined history filters keep their query across pages, clear safely and f
   await expect(form.getByLabel('Pesquisar na descrição')).toHaveValue('')
   expect(queries.at(-1)?.get('q')).toBeNull()
   expect(queries.at(-1)?.get('offset')).toBe('0')
-  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false)
+  const layout = await page.evaluate(() => ({
+    viewport: innerWidth,
+    width: document.documentElement.scrollWidth,
+    overflowing: [...document.querySelectorAll('body *')]
+      .filter((element) => element.getBoundingClientRect().right > innerWidth + 1)
+      .map((element) => ({ tag: element.tagName, class: element.className })),
+  }))
+  expect(layout.width, JSON.stringify(layout)).toBeLessThanOrEqual(layout.viewport)
 })
 
 test('posting reapplies the active history filter and unavailable search never fabricates empty results', async ({
