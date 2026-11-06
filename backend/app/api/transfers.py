@@ -15,6 +15,7 @@ from app.schemas.transfers import (
     TransferListResponse,
     TransferPostInput,
     TransferResponse,
+    TransferUpdateInput,
 )
 from app.services.sessions import SessionService
 from app.services.transfers import TransferService, transfer_etag
@@ -47,6 +48,22 @@ def get_transfer(
     service: Annotated[TransferService, Depends(transfer_service)],
 ):
     result = service.get(token, transfer_id)
+    response.headers["ETag"] = transfer_etag(result)
+    return result
+
+
+@router.patch("/{transfer_id}", response_model=TransferResponse)
+def update_transfer(
+    transfer_id: UUID,
+    data: TransferUpdateInput,
+    response: Response,
+    token: Annotated[SecretStr, Depends(financial_mutation)],
+    service: Annotated[TransferService, Depends(transfer_service)],
+    etag: Annotated[
+        str, Header(alias="If-Match", min_length=66, max_length=66, pattern=r'^"[0-9a-f]{64}"$')
+    ],
+):
+    result = service.update(token, transfer_id, data, etag)
     response.headers["ETag"] = transfer_etag(result)
     return result
 
