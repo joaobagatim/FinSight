@@ -1519,6 +1519,107 @@ def test_transfer_posting_concurrency_rollback_revocation_and_archived_replay(
         service.post(token, second_id, transfer_etag(second))
 
 
+def test_balance_history_has_exact_daily_closings_and_preserves_archived_history(
+    context, transfer_resources, deletion_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransactionService(sessions)
+    for amount, day, status in (
+        ("150.00", "2026-01-02", "posted"),
+        ("0.10", "2026-01-04", "posted"),
+        ("100.00", "2026-01-05", "posted"),
+        ("999.00", "2026-01-04", "planned"),
+    ):
+        service.create(
+            token,
+            uuid4(),
+            TransactionInput(**body(own, amount=amount, effective_date=day, status=status)),
+        )
+    transfers = TransferService(sessions)
+    transfers.create(token, uuid4(), TransferInput(**transfer_body(own)))
+    transfers.create(
+        token,
+        uuid4(),
+        TransferInput(**transfer_body(own, status="planned", effective_date="2026-01-05")),
+    )
+    removed = service.create(
+        token, uuid4(), TransactionInput(**body(own, amount="25.00", effective_date="2026-01-04"))
+    )
+    service.delete(token, removed, transaction_etag(service.get(token, removed)))
+    stack, make = clients(context)
+    with stack:
+        client = make(emails[0])
+        path = f"/api/v1/accounts/{own['account']}/balance/history"
+        response = client.get(path, params={"date_from": "2026-01-01", "date_to": "2026-01-06"})
+        assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+        assert response.json()["account_id"] == str(own["account"])
+        assert response.json()["points"] == [
+            {"date": f"2026-01-0{index}", "balance": amount}
+            for index, amount in enumerate(
+                ("1000.00", "850.00", "850.00", "349.90", "249.90", "249.90"), 1
+            )
+        ]
+        # A subrange starts from its actual closing, not from the opening balance again.
+        subrange = client.get(path, params={"date_from": "2026-01-04", "date_to": "2026-01-05"})
+        assert subrange.json()["points"] == response.json()["points"][3:5]
+        assert (
+            response.json()["points"][-1]["balance"]
+            == balance(client, own, "2026-01-06").json()["balance"]
+        )
+        with database.sessions.begin() as session:
+            session.get(Account, own["account"]).is_active = False
+        assert (
+            client.get(path, params={"date_from": "2026-01-01", "date_to": "2026-01-06"}).json()
+            == response.json()
+        )
+        target = client.get(
+            f"/api/v1/accounts/{own['target']}/balance/history",
+            params={"date_from": "2026-01-03", "date_to": "2026-01-05"},
+        )
+        assert [point["balance"] for point in target.json()["points"]] == [
+            "1000.00",
+            "1500.00",
+            "1500.00",
+        ]
+
+
+def test_balance_history_rejects_foreign_accounts_invalid_dates_and_oversized_periods(
+    context, resources
+):
+    stack, make = clients(context)
+    with stack:
+        client, other, anonymous = make(context[3][0]), make(context[3][1]), make()
+        own, foreign = resources
+        path = f"/api/v1/accounts/{own['account']}/balance/history"
+        params = {"date_from": "2026-01-01", "date_to": "2026-01-01"}
+        assert anonymous.get(path, params=params).status_code == 401
+        assert other.get(path, params=params).status_code == 404
+        for unavailable in (foreign["account"], uuid4()):
+            response = client.get(f"/api/v1/accounts/{unavailable}/balance/history", params=params)
+            assert response.status_code == 404 and response.json() == {
+                "detail": "Account not found"
+            }
+        assert client.get(path, params=params).json()["points"] == [
+            {"date": "2026-01-01", "balance": "1000.00"}
+        ]
+        for changes in (
+            {"date_from": "2025-12-31"},
+            {"date_from": "2026-01-02"},
+            {"date_to": "2026-02-30"},
+            {"date_to": "2026-04-04"},
+        ):
+            assert client.get(path, params=params | changes).status_code == 422
+        assert client.get(path).status_code == 422
+        longest = client.get(path, params=params | {"date_to": "2026-04-03"})
+        assert longest.status_code == 200 and len(longest.json()["points"]) == 93
+        assert all(point["balance"] == "1000.00" for point in longest.json()["points"])
+        with context[0].sessions.begin() as session:
+            session.get(Account, own["account"]).opening_balance = Decimal("-0.10")
+        assert client.get(path, params=params).json()["points"][0]["balance"] == "-0.10"
+
+
 def test_consolidated_balance_scopes_cancel_transfers_and_exclude_unbooked_money(
     context, transfer_resources, deletion_resources
 ):
