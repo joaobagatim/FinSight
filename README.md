@@ -1583,6 +1583,49 @@ está aberto; uma criação pendente impede abrir nova confirmação. Não há n
 storage, dependência, tabela ou migration. O destino mantém a exigência existente
 de revisão0011; startup não migra nem altera o banco pessoal automaticamente.
 
+### Editar uma transferência
+
+No histórico de **Transferências**, use **Editar transferência** para revisar
+origem, destino, valor, data e descrição. As contas finais precisam ser ativas,
+distintas e próprias, com data posterior à abertura de ambas. A situação
+planejada/efetivada é preservada; não há reversão de situação nesse formulário.
+Para manter uma conta arquivada, reative-a antes de editar.
+
+```http
+PATCH /api/v1/transfers/UUID-DA-TRANSFERENCIA
+If-Match: "ETAG-DA-CONSULTA"
+Content-Type: application/json
+
+{"amount":"250.10","description":"Descrição revisada"}
+```
+
+Exige sessão, origem permitida, CSRF e `If-Match` obtido no GET individual.
+Campos opcionais: `from_account_id`, `to_account_id`, `amount`, `effective_date`
+e `description`. Envie ao menos um; somente `description` aceita `null` para
+limpar o texto. `status` e `user_id` são recusados. A resposta 200 contém os dados
+atuais e novo `ETag`. Dados desatualizados retornam 412; transferência ausente ou
+alheia retorna o mesmo 404; referências/dados inválidos retornam 422.
+
+Uma transferência efetivada de R$ 500,00 entre duas contas de R$ 1.000,00 deixa
+R$ 500,00 e R$ 1.500,00. Corrigir o valor para R$ 250,10 deixa R$ 749,90 e
+R$ 1.250,10. Trocar contas/data remove o efeito das referências antigas e aplica
+o das novas na mesma gravação. Planejadas permanecem fora do saldo real. A linha
+da transferência e sua identidade de criação são preservadas; não surgem receitas,
+despesas ou outra transferência. Repetir a criação original retorna o mesmo ID
+sem desfazer a edição.
+
+Backend bloqueia sessão/usuário, transferência e contas antigas/novas em ordem
+estável; confere o snapshot e grava a alteração de forma atômica. Falha de commit
+preserva os dados e saldos anteriores. A consulta do histórico reinicia sua
+paginação após editar, e valores de saldo anteriores são ocultados.
+
+Conflito ou resultado incerto exige **Recarregar situação**: faz somente GET,
+substitui o rascunho e confere os valores atuais antes de permitir outra gravação.
+Duplo clique é bloqueado; criação e efetivação ficam indisponíveis enquanto a
+edição está aberta. Esse fluxo não cria auditoria imutável de todas as versões
+anteriores. Não há nova migração ou aplicação de schema ao banco pessoal.
+A exclusão de transferências permanece para uma etapa própria.
+
 ### Contrato e repetição segura
 
 `POST /api/v1/transfers` exige sessão viva, origem autorizada, CSRF e
