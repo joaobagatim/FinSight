@@ -10,7 +10,12 @@ export default tseslint.config(
     extends: [js.configs.recommended],
   },
   {
-    files: ['playwright.config.ts', 'playwright.auth.config.ts', 'tests/**/*.ts'],
+    files: [
+      'playwright.config.ts',
+      'playwright.auth.config.ts',
+      'playwright.demo.config.ts',
+      'tests/**/*.ts',
+    ],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
   },
 )
