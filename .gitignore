@@ -5,6 +5,7 @@
 /docs/setup.md
 
 # Secrets, credentials and local configuration
+.demo/
 .env
 .env.*
 !.env.example
