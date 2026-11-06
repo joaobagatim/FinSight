@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 from datetime import date
+from unicodedata import category as unicode_category
 from uuid import UUID
 
 from pydantic import SecretStr
@@ -172,9 +173,16 @@ class TransactionService:
         status: str | None,
         date_from: date | None,
         date_to: date | None,
+        search: str | None = None,
     ):
         if date_from is not None and date_to is not None and date_from > date_to:
             raise TransactionRejected()
+        if search is not None:
+            if len(search) > 255:
+                raise TransactionRejected()
+            search = search.strip()
+            if not search or any(unicode_category(char).startswith("C") for char in search):
+                raise TransactionRejected()
         with self.sessions.authorized_transaction(token) as (session, owner):
             query = (
                 select(Transaction)
@@ -193,6 +201,9 @@ class TransactionService:
                 query = query.where(Transaction.effective_date >= date_from)
             if date_to is not None:
                 query = query.where(Transaction.effective_date <= date_to)
+            if search is not None:
+                # A bound, literal substring: SQL wildcard characters are escaped.
+                query = query.where(Transaction.description.icontains(search, autoescape=True))
             rows = session.scalars(
                 query.order_by(
                     Transaction.effective_date.desc(),

@@ -234,6 +234,91 @@ def test_posted_expense_changes_exact_balance_but_planned_does_not(context, reso
         )
 
 
+def test_description_search_combines_filters_pagination_and_literal_text(
+    context, resources, deletion_resources
+):
+    database, sessions, _, emails = context
+    own, foreign = resources
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransactionService(sessions)
+    ids = []
+    for day, status in (("2026-01-02", "posted"), ("2026-01-03", "planned")):
+        ids.append(
+            service.create(
+                token,
+                uuid4(),
+                TransactionInput(
+                    **body(own, description="Compra 100%_/ Café", effective_date=day, status=status)
+                ),
+            )
+        )
+    income = service.create(
+        token,
+        uuid4(),
+        TransactionInput(
+            **body(
+                own,
+                description="Compra 100%_/ Café",
+                type="income",
+                category_id=str(own["income"]),
+                effective_date="2026-01-04",
+            )
+        ),
+    )
+    service.create(token, uuid4(), TransactionInput(**body(own, description="Compra 100xx/ Café")))
+    removed = service.create(
+        token, uuid4(), TransactionInput(**body(own, description="Compra 100%_/ Café"))
+    )
+    service.delete(token, removed, transaction_etag(service.get(token, removed)))
+    other_token = sessions.login(emails[1], PASSWORD).access_token
+    service.create(
+        other_token, uuid4(), TransactionInput(**body(foreign, description="Compra 100%_/ Café"))
+    )
+    stack, make = clients(context)
+    with stack:
+        client, anonymous = make(emails[0]), make()
+        assert anonymous.get(PATH, params={"q": "Café"}).status_code == 401
+        query = {"q": "  100%_/ cAFÉ  ", "limit": 1}
+        first = client.get(PATH, params=query)
+        assert first.status_code == 200 and first.headers["cache-control"] == "no-store"
+        assert [item["id"] for item in first.json()["items"]] == [str(income)]
+        assert first.json()["has_more"]
+        second = client.get(PATH, params=query | {"offset": 1})
+        assert [item["id"] for item in second.json()["items"]] == [str(ids[1])]
+        filtered = client.get(
+            PATH,
+            params={
+                "q": "100%_/",
+                "account_id": str(own["account"]),
+                "category_id": str(own["expense"]),
+                "type": "expense",
+                "status": "planned",
+                "date_from": "2026-01-03",
+                "date_to": "2026-01-03",
+            },
+        )
+        assert filtered.status_code == 200 and [
+            item["id"] for item in filtered.json()["items"]
+        ] == [str(ids[1])]
+        assert not filtered.json()["has_more"]
+        for value in ("cafe", "' OR 1=1 --", "not present"):
+            assert client.get(PATH, params={"q": value}).json()["items"] == []
+        assert (
+            client.get(PATH, params={"q": "100%_/", "account_id": str(foreign["account"])}).json()[
+                "items"
+            ]
+            == []
+        )
+        for value in ("", "   ", "x" * 256, "bad\x00text", "bad\ntext"):
+            assert client.get(PATH, params={"q": value}).status_code == 422
+        with database.sessions.begin() as session:
+            session.get(Account, own["account"]).is_active = False
+            session.get(Category, own["expense"]).is_active = False
+        assert client.get(PATH, params={"q": "100%_/", "category_id": str(own["expense"])}).json()[
+            "items"
+        ]
+
+
 def test_transaction_references_security_and_date_boundaries(context, resources):
     stack, make = clients(context)
     with stack:

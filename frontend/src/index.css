@@ -709,3 +709,31 @@ fieldset {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+.transaction-filters {
+  margin-block: 1rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.transaction-filters legend,
+.transaction-filter-grid .field {
+  min-width: 0;
+  max-width: 100%;
+}
+.transaction-filters fieldset {
+  min-width: 0;
+}
+.transaction-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 1rem;
+}
+.transaction-filters button,
+.transactions-layout .reference-actions button {
+  max-width: 100%;
+  height: auto;
+  min-height: 44px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
