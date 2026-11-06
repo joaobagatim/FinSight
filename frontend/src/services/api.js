@@ -120,6 +120,93 @@ async function authenticatedRead(path) {
 }
 
 export const api = {
+  projectedBalance: (ownerId, scope, baseDate, targetDate, overduePolicy, accountIds) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const query = new URLSearchParams({
+        scope,
+        base_date: baseDate,
+        target_date: targetDate,
+        overdue_policy: overduePolicy,
+      })
+      if (scope === 'selected') accountIds.forEach((id) => query.append('account_id', id))
+      return send(`/accounts/balances/projected?${query}`)
+    }),
+  consolidatedBalance: (ownerId, scope, asOf, accountIds) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const query = new URLSearchParams({ scope, as_of: asOf })
+      if (scope === 'selected') accountIds.forEach((id) => query.append('account_id', id))
+      return send(`/accounts/balances/consolidated?${query}`)
+    }),
+  transfer: (ownerId, id) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/transfers/${encodeURIComponent(id)}`, { versioned: true })
+      if (result.data?.id !== id || !['planned', 'posted'].includes(result.data.status))
+        throw new ApiError(0)
+      return result
+    }),
+  postTransfer: (ownerId, id, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send(`/transfers/${encodeURIComponent(id)}/post`, {
+          method: 'POST',
+          data: {},
+          versioned: true,
+          headers: { 'If-Match': etag, 'X-CSRF-Token': await bootstrap() },
+        })
+        if (result.data?.id !== id || result.data.status !== 'posted') throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
+  transfers: (ownerId, offset = 0) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/transfers?limit=50&offset=${offset}`)
+      if (!Array.isArray(result?.items)) throw new ApiError(0)
+      return result
+    }),
+  createTransfer: (ownerId, data, key) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send('/transfers', {
+          method: 'POST',
+          data,
+          headers: { 'X-CSRF-Token': await bootstrap(), 'Idempotency-Key': key },
+        })
+        if (
+          typeof result?.id !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result.id)
+        )
+          throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
   transaction: (ownerId, id) =>
     coordinated(async () => {
       const profile = await renewUnlocked()
@@ -128,6 +215,27 @@ export const api = {
       if (result.data?.id !== id || !['planned', 'posted'].includes(result.data.status))
         throw new ApiError(0)
       return result
+    }),
+  deleteTransaction: (ownerId, id, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const remove = async () => {
+        const csrf = await bootstrap()
+        return send(`/transactions/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          data: {},
+          headers: { 'If-Match': etag, 'X-CSRF-Token': csrf },
+        })
+      }
+      try {
+        return await remove()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return remove()
+      }
     }),
   updateTransaction: (ownerId, id, data, etag) =>
     coordinated(async () => {
@@ -175,11 +283,23 @@ export const api = {
         return submit()
       }
     }),
-  transactions: (ownerId, offset = 0) =>
+  transactions: (ownerId, offset = 0, filters = {}) =>
     coordinated(async () => {
       const profile = await renewUnlocked()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/transactions?limit=50&offset=${offset}`)
+      const query = new URLSearchParams({ limit: '50', offset: String(offset) })
+      for (const field of [
+        'account_id',
+        'category_id',
+        'type',
+        'status',
+        'date_from',
+        'date_to',
+        'q',
+      ]) {
+        if (filters[field]) query.set(field, filters[field])
+      }
+      const result = await send(`/transactions?${query}`)
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
     }),
@@ -318,6 +438,8 @@ export const api = {
 }
 
 export function errorMessage(error, fallback) {
+  if (error.status === 410)
+    return 'Este lançamento foi excluído. Atualize o histórico para conferir.'
   if (error.status === 429) return 'Muitas tentativas. Espere um pouco e tente novamente.'
   if (error.status === 0 || error.status >= 500)
     return 'Não conseguimos acessar o serviço. Tente novamente em instantes.'

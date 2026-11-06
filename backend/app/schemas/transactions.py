@@ -135,3 +135,34 @@ class AccountBalanceResponse(BaseModel):
     @field_serializer("opening_balance", "balance")
     def money_string(self, value: Decimal) -> str:
         return format(value, ".2f")
+
+
+class ConsolidatedBalanceResponse(BaseModel):
+    as_of: date
+    scope: Literal["active", "all", "selected"]
+    currency: Literal["BRL"] = "BRL"
+    account_ids: list[UUID] | None
+    account_count: int = Field(ge=0)
+    balance: Decimal
+
+    @field_serializer("balance")
+    def money_string(self, value: Decimal) -> str:
+        return format(value, ".2f")
+
+
+class ProjectedBalanceResponse(BaseModel):
+    base_date: date
+    target_date: date
+    overdue_policy: Literal["include", "exclude"]
+    scope: Literal["active", "all", "selected"]
+    currency: Literal["BRL"] = "BRL"
+    account_ids: list[UUID] | None
+    account_count: int = Field(ge=0)
+    base_balance: Decimal
+    posted_future_delta: Decimal
+    planned_delta: Decimal
+    projected_balance: Decimal
+
+    @field_serializer("base_balance", "posted_future_delta", "planned_delta", "projected_balance")
+    def money_string(self, value: Decimal) -> str:
+        return format(value, ".2f")

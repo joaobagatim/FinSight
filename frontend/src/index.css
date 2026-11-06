@@ -692,3 +692,58 @@ fieldset {
   text-align: center;
   font-weight: 600;
 }
+
+/* Consolidated balance selection keeps account names readable on narrow screens. */
+.consolidated-choice {
+  display: flex;
+  align-items: start;
+  gap: 0.75rem;
+  margin-block: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.consolidated-choice input {
+  width: 1.1rem;
+  min-width: 1.1rem;
+  margin-top: 0.2rem;
+}
+
+.consolidated-result {
+  overflow-wrap: anywhere;
+}
+
+.consolidated-panel button {
+  max-width: 100%;
+  min-height: 44px;
+  height: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.transaction-filters {
+  margin-block: 1rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.transaction-filters legend,
+.transaction-filter-grid .field {
+  min-width: 0;
+  max-width: 100%;
+}
+.transaction-filters fieldset {
+  min-width: 0;
+}
+.transaction-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 1rem;
+}
+.transaction-filters button,
+.transactions-layout .reference-actions button {
+  max-width: 100%;
+  height: auto;
+  min-height: 44px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

@@ -4,6 +4,8 @@ import AuthPanel from './components/AuthPanel.jsx'
 import AccountsPanel from './components/AccountsPanel.jsx'
 import CategoriesPanel from './components/CategoriesPanel.jsx'
 import TransactionsPanel from './components/TransactionsPanel.jsx'
+import TransfersPanel from './components/TransfersPanel.jsx'
+import ConsolidatedBalancePanel from './components/ConsolidatedBalancePanel.jsx'
 import { api, errorMessage, watchSessionChanges } from '@/services/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -32,6 +34,7 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [transactionIntent, setTransactionIntent] = useState(null)
+  const [transferIntent, setTransferIntent] = useState(null)
   const main = useRef(null)
   const authVersion = useRef(0)
 
@@ -45,6 +48,7 @@ export default function App() {
         authVersion.current += 1
         setUser(null)
         setTransactionIntent(null)
+        setTransferIntent(null)
         setBusy(false)
         setView('home')
         setNotice('Seu acesso mudou em outra aba. Acesse novamente para continuar.')
@@ -56,6 +60,7 @@ export default function App() {
     authVersion.current += 1
     setUser(profile)
     setTransactionIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
+    setTransferIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
     setView('accounts')
     setNotice('')
   }, [])
@@ -64,6 +69,7 @@ export default function App() {
     authVersion.current += 1
     setUser(null)
     setTransactionIntent(null)
+    setTransferIntent(null)
     setView('access')
     setNotice('Sua sessão terminou. Entre novamente para continuar.')
   }, [])
@@ -84,6 +90,7 @@ export default function App() {
       if (error.status === 401) {
         setUser(null)
         setTransactionIntent(null)
+        setTransferIntent(null)
         setView('access')
       } else {
         setNotice(errorMessage(error, 'Não foi possível acessar sua conta. Tente novamente.'))
@@ -101,6 +108,7 @@ export default function App() {
       await api.logout()
       setUser(null)
       setTransactionIntent(null)
+      setTransferIntent(null)
       setView('home')
       requestAnimationFrame(() => main.current?.focus())
     } catch (error) {
@@ -142,7 +150,7 @@ export default function App() {
               </a>
             </Button>
           )}
-          {!['accounts', 'categories', 'transactions'].includes(view) && (
+          {!['accounts', 'categories', 'transactions', 'transfers', 'balances'].includes(view) && (
             <Button type="button" size="sm" onClick={enter} disabled={busy}>
               {busy ? 'Aguarde…' : user ? 'Minhas contas' : 'Acessar FinSight'}
             </Button>
@@ -162,54 +170,81 @@ export default function App() {
           </p>
         )}
         {view === 'access' && <AuthPanel onAuthenticated={authenticated} />}
-        {['accounts', 'categories', 'transactions'].includes(view) && user && (
-          <section className="workspace">
-            <p className="eyebrow">Seu espaço</p>
-            <h1>Olá, {user.name}.</h1>
-            <p className="muted workspace-description">
-              Acompanhe suas contas, receitas e despesas com clareza.
-            </p>
-            <nav className="account-actions workspace-navigation" aria-label="Área financeira">
-              <Button
-                type="button"
-                variant={view === 'accounts' ? 'default' : 'outline'}
-                aria-current={view === 'accounts' ? 'page' : undefined}
-                onClick={() => setView('accounts')}
-              >
-                Contas
-              </Button>
-              <Button
-                type="button"
-                variant={view === 'categories' ? 'default' : 'outline'}
-                aria-current={view === 'categories' ? 'page' : undefined}
-                onClick={() => setView('categories')}
-              >
-                Categorias
-              </Button>
-              <Button
-                type="button"
-                variant={view === 'transactions' ? 'default' : 'outline'}
-                aria-current={view === 'transactions' ? 'page' : undefined}
-                onClick={() => setView('transactions')}
-              >
-                Lançamentos
-              </Button>
-            </nav>
-            {view === 'accounts' ? (
-              <AccountsPanel key={user.id} ownerId={user.id} onExpired={expired} />
-            ) : view === 'categories' ? (
-              <CategoriesPanel key={user.id} ownerId={user.id} onExpired={expired} />
-            ) : (
-              <TransactionsPanel
-                key={user.id}
-                ownerId={user.id}
-                onExpired={expired}
-                intent={transactionIntent?.ownerId === user.id ? transactionIntent : null}
-                onIntent={setTransactionIntent}
-              />
-            )}
-          </section>
-        )}
+        {['accounts', 'categories', 'transactions', 'transfers', 'balances'].includes(view) &&
+          user && (
+            <section className="workspace">
+              <p className="eyebrow">Seu espaço</p>
+              <h1>Olá, {user.name}.</h1>
+              <p className="muted workspace-description">
+                Acompanhe suas contas, receitas e despesas com clareza.
+              </p>
+              <nav className="account-actions workspace-navigation" aria-label="Área financeira">
+                <Button
+                  type="button"
+                  variant={view === 'accounts' ? 'default' : 'outline'}
+                  aria-current={view === 'accounts' ? 'page' : undefined}
+                  onClick={() => setView('accounts')}
+                >
+                  Contas
+                </Button>
+                <Button
+                  type="button"
+                  variant={view === 'categories' ? 'default' : 'outline'}
+                  aria-current={view === 'categories' ? 'page' : undefined}
+                  onClick={() => setView('categories')}
+                >
+                  Categorias
+                </Button>
+                <Button
+                  type="button"
+                  variant={view === 'transactions' ? 'default' : 'outline'}
+                  aria-current={view === 'transactions' ? 'page' : undefined}
+                  onClick={() => setView('transactions')}
+                >
+                  Lançamentos
+                </Button>
+                <Button
+                  type="button"
+                  variant={view === 'transfers' ? 'default' : 'outline'}
+                  aria-current={view === 'transfers' ? 'page' : undefined}
+                  onClick={() => setView('transfers')}
+                >
+                  Transferências
+                </Button>
+                <Button
+                  type="button"
+                  variant={view === 'balances' ? 'default' : 'outline'}
+                  aria-current={view === 'balances' ? 'page' : undefined}
+                  onClick={() => setView('balances')}
+                >
+                  Saldos
+                </Button>
+              </nav>
+              {view === 'accounts' ? (
+                <AccountsPanel key={user.id} ownerId={user.id} onExpired={expired} />
+              ) : view === 'categories' ? (
+                <CategoriesPanel key={user.id} ownerId={user.id} onExpired={expired} />
+              ) : view === 'balances' ? (
+                <ConsolidatedBalancePanel key={user.id} ownerId={user.id} onExpired={expired} />
+              ) : view === 'transfers' ? (
+                <TransfersPanel
+                  key={user.id}
+                  ownerId={user.id}
+                  onExpired={expired}
+                  intent={transferIntent?.ownerId === user.id ? transferIntent : null}
+                  onIntent={setTransferIntent}
+                />
+              ) : (
+                <TransactionsPanel
+                  key={user.id}
+                  ownerId={user.id}
+                  onExpired={expired}
+                  intent={transactionIntent?.ownerId === user.id ? transactionIntent : null}
+                  onIntent={setTransactionIntent}
+                />
+              )}
+            </section>
+          )}
         {view === 'home' && (
           <>
             <section className="hero" aria-labelledby="hero-title">

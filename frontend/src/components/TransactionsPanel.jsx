@@ -112,12 +112,13 @@ export default function TransactionsPanel({ ownerId, onExpired, intent, onIntent
           onExpired={onExpired}
         />
         <TransactionHistory
-          key={`history-${revision}`}
+          revision={revision}
           ownerId={ownerId}
           onExpired={onExpired}
           disabled={Boolean(intent)}
           onBalanceChanged={balanceChanged}
           references={references}
+          onLoadReferences={load}
           onActionChange={setActionOpen}
         />
       </div>

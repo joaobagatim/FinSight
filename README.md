@@ -324,7 +324,13 @@ a chave composta de proprietário/id/tipo em categorias;
 persistir tentativas de criação de contas por usuário/chave;
 `0009_transaction_requests` acrescenta `transaction_creation_requests` e uma
 chave composta proprietário/id em `transactions` para proteger a repetição de
-lançamentos manuais. Nenhum dado financeiro é criado pela migration.
+lançamentos manuais. `0010_transaction_deletion` acrescenta `transactions.deleted_at`
+para exclusão lógica, sem marcar ou excluir registros existentes. Nenhum dado
+financeiro é criado pelas migrations.
+
+`0011_transfer_requests` acrescenta a tabela técnica `transfer_creation_requests`
+e a chave composta proprietário/id em `transfers`, preservando transferências
+existentes. O schema atual tem quinze tabelas físicas, incluindo `alembic_version`.
 O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
 domínio estão modeladas; autenticação HTTP e cadastro/consulta de contas próprias
 estão disponíveis. Os demais recursos financeiros ainda serão implementados.
@@ -354,10 +360,11 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0009_transaction_requests` e as quatorze tabelas `alembic_version`, `users`,
+`0011_transfer_requests` e as quinze tabelas `alembic_version`, `users`,
 `user_sessions`, `accounts`, `categories`, `import_jobs`, `import_rows`,
 `transactions`, `transfers`, `financial_goals`, `goal_allocations` e
-`refresh_token_history`, `account_creation_requests` e `transaction_creation_requests`.
+`refresh_token_history`, `account_creation_requests`, `transaction_creation_requests`
+e `transfer_creation_requests`.
 Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
 são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
@@ -1079,7 +1086,7 @@ SELECT count(*) AS persisted_creation_requests
 FROM public.account_creation_requests;
 ```
 
-Resultado esperado em um banco recém-migrado: revisão `0009_transaction_requests`,
+Resultado esperado em um banco recém-migrado: revisão `0011_transfer_requests`,
 cinco colunas não nulas, chave primária composta, duas chaves estrangeiras,
 verificações de digest/UUIDv4 e zero registros. Nenhuma conta, usuário ou chave é
 criada automaticamente. A API continua sem executar migrations no startup.
@@ -1151,9 +1158,85 @@ consultada ficam de fora. Uma consulta anterior à abertura é rejeitada.
 Contas/categorias arquivadas continuam compondo seu histórico.
 
 Exemplo: abertura de1000,00 menos uma despesa efetivada de150,00 resulta em850,00.
-Planejar outra despesa de200,00 mantém o saldo real em850,00. Projeções de saldo,
-saldo consolidado, reservas e a API de criação de transferências ficam para depois.
+Planejar outra despesa de200,00 mantém o saldo real em850,00. Projeções de saldo
+e reservas ficam para depois. O saldo consolidado está descrito abaixo. A criação de transferências está
+disponível na API e interface descritas na seção específica abaixo.
 O cálculo já considera transferências persistidas pelo modelo, sem criá-las.
+
+### Saldo consolidado com filtro explícito
+
+A área **Saldos** soma as posições reais por conta na data informada. Escolha:
+
+- **Contas ativas atualmente:** padrão; usa o estado atual de ativação, inclusive
+  para uma data passada. Abrange todas as contas próprias ativas, sem limitar o
+  total à primeira página da lista de opções.
+- **Todas as contas, incluindo arquivadas:** conserva o patrimônio das contas
+  arquivadas na soma.
+- **Contas selecionadas:** de 1 a 100 contas próprias distintas, incluindo
+  arquivadas quando escolhidas. As opções são paginadas; carregue mais para
+  selecionar contas de outras páginas. Atualizar a lista limpa a seleção.
+
+Uma transferência entre duas contas incluídas se cancela no total. Se apenas um
+lado for incluído, o total filtrado muda pelo valor recebido ou enviado. Exemplo:
+duas contas com1000,00, transferência interna de500,00 e despesa de150,00 resultam
+em350,00 na origem e1500,00 no destino; o consolidado das duas é1850,00. Incluir
+somente a origem produz350,00. Planejados, lançamentos excluídos e efetivados
+posteriores à data consultada ficam fora desses saldos.
+
+O servidor exige uma data igual ou posterior à abertura de **todas** as contas
+incluídas. Se alguma ainda não existia nessa data, rejeita a consulta em vez de
+ignorar a conta ou inventar saldo zero. Use outra data ou a seleção manual.
+Quando o filtro válido não inclui conta alguma, retorna zero com contagem0;
+a tela informa explicitamente que nenhuma conta foi incluída. Falha de serviço
+não é mostrada como zero. Alterar data, filtro ou seleção oculta o resultado
+anterior; consultar novamente atualiza a posição.
+
+#### Contrato da API
+
+```text
+GET /api/v1/accounts/balances/consolidated?as_of=2026-01-04&scope=active
+GET /api/v1/accounts/balances/consolidated?as_of=2026-01-04&scope=all
+GET /api/v1/accounts/balances/consolidated?as_of=2026-01-04&scope=selected&account_id=<UUID4>&account_id=<UUID4>
+```
+
+`as_of` é obrigatório; `scope` aceita `active` (padrão), `all` ou `selected`.
+Somente `selected` aceita `account_id`, repetido uma vez por conta. A seleção
+precisa ter1–100UUIDv4 distintos. Datas, combinações, duplicatas ou limites
+inválidos retornam422. Conta alheia/inexistente em qualquer posição da seleção
+retorna o mesmo404 e invalida o pedido inteiro, sem soma parcial nem identificação
+de qual conta falhou. O proprietário é sempre derivado da sessão, sem `user_id`
+do cliente. Sessão inválida retorna401, limite429 e indisponibilidade503.
+
+Resposta de exemplo para o cenário fictício anterior:
+
+```json
+{
+  "as_of": "2026-01-04",
+  "scope": "active",
+  "currency": "BRL",
+  "account_ids": null,
+  "account_count": 2,
+  "balance": "1850.00"
+}
+```
+
+Em seleção manual, `account_ids` contém os UUIDs canônicos ordenados; nos outros
+filtros é `null`. O total é string decimal com duas casas. A resposta é compacta,
+com contagem e filtro, sem lista ilimitada de posições individuais. Usa cookies
+de sessão, autorização por usuário, rate limiting e `no-store`; erros não ecoam
+valores ou dados financeiros.
+
+O saldo individual e o consolidado compartilham o mesmo cálculo por conta.
+A soma, contagem e validação das aberturas são obtidas em **uma única consulta
+financeira SQL**, com snapshot consistente. Não há soma de respostas HTTP
+independentes, N+1, multiplicação por joins ou cálculo monetário com float.
+Autenticação pode executar suas consultas próprias antes dessa consulta de saldo.
+Transferências internas entram e saem no mesmo snapshot quando ambos os lados
+estão incluídos. A consulta não cria saldos persistidos ou altera movimentos.
+
+Sem migration ou dependência nova; o schema existente0011 continua compatível.
+Não há projeção de saldo ou gráfico/dashboard nesta entrega. O resultado é uma
+posição consultada: faça nova consulta para refletir mudanças posteriores.
 
 Referências inválidas/incompatíveis/inativas ou datas proibidas retornam422
 estático; consultas a recursos alheios e inexistentes retornam o mesmo404.
@@ -1165,6 +1248,100 @@ Os testes usam bancos descartáveis; a aplicação não aplica essa migration no
 banco pessoal. Remover a tabela técnica por downgrade perde a memória de repetição,
 embora preserve os lançamentos, e pode permitir duplicação após novas tentativas;
 não faça esse rollback num banco em uso sem um plano específico.
+
+### Simular saldo futuro
+
+Na área **Saldos**, altere **Tipo de consulta** para **Simular saldo futuro**.
+Escolha as contas, uma data-base (inicialmente o dia local de hoje), uma data
+estritamente posterior e como tratar os planejados vencidos antes da data-base.
+A simulação usa somente registros cadastrados e sua situação atual; não prevê
+movimentos desconhecidos nem garante saldo disponível. Uma data-base passada
+não reconstitui como os status dos registros estavam naquele dia.
+
+O resultado apresenta três parcelas e sua soma:
+
+```text
+saldo projetado = saldo efetivado na data-base
+                + efetivados após a base até a data futura
+                + planejados considerados até a data futura
+```
+
+Exemplo fictício: R$ 850,00 na base, R$ 100,00 de despesas já efetivadas com data
+futura e R$ 60,00 de despesas planejadas resultam em R$ 690,00. Considerar mais
+R$ 30,00 de planejados vencidos resulta em R$ 660,00. A consulta não efetiva
+movimentos; o saldo real na data futura continua em R$ 750,00 nesse exemplo.
+
+Não há política implícita para vencidos. **Desconsiderar** exclui planejados com
+data anterior à base; **incluir** considera todos os planejados elegíveis até a
+data futura. Planejados na própria data-base entram nas duas opções. Excluídos
+e movimentos posteriores à data futura ficam fora. Efetivados e planejados são
+parcelas distintas, evitando contar o mesmo movimento duas vezes. Transferências
+planejadas também se cancelam quando ambas as contas entram no filtro.
+
+```http
+GET /api/v1/accounts/balances/projected?base_date=2026-01-05&target_date=2026-01-10&overdue_policy=exclude&scope=active
+```
+
+Requer sessão própria e os três parâmetros `base_date`, `target_date` e
+`overdue_policy=include|exclude`. `scope` aceita `active` (padrão), `all` ou
+`selected`, com as mesmas regras do consolidado: somente `selected` aceita
+`account_id` repetido, com 1–100 UUIDs distintos. Ativas significa ativas
+atualmente, inclusive em simulações com datas passadas. Todas as contas
+incluídas precisam ter abertura até a data-base. Seleção parcialmente
+indisponível/alheia retorna 404 sem total parcial; datas, política ou filtros
+inválidos retornam 422.
+
+A resposta inclui datas, política, escopo, BRL, quantidade de contas, IDs quando
+selecionados e strings monetárias com duas casas: `base_balance`,
+`posted_future_delta`, `planned_delta` e `projected_balance`. Os componentes são
+calculados em uma única instrução SQL, usando Decimal/NUMERIC e o mesmo snapshot.
+Não há saldo persistido, efetivação automática, nova dependência ou migração.
+Consultas válidas sem contas mostram zero com essa condição explícita;
+indisponibilidade exibe erro sem fabricar saldo. Alterar filtros oculta a posição
+anterior. Nenhuma consulta aplica migrações ao banco pessoal.
+
+Os testes de navegador desta simulação ficam em
+`tests/auth-browser/projected-balance.spec.ts`; os cenários de API e cálculo ficam
+nos dois casos `test_projected_balance_*` de
+`backend/tests/integration/test_manual_transactions.py`.
+
+### Filtrar e pesquisar lançamentos
+
+Em **Lançamentos**, use **Filtros e pesquisa** para combinar conta, categoria,
+receita/despesa, situação planejada/efetivada e intervalo de datas inclusivo.
+**Pesquisar na descrição** procura um trecho literal, sem diferenciar maiúsculas
+e minúsculas; considera acentos e sinais como escritos. `%` e `_` não são curingas.
+O limite é de 255 caracteres; espaços nas extremidades são removidos.
+
+**Aplicar filtros** inicia uma consulta na primeira página. **Carregar mais
+lançamentos** mantém os mesmos filtros. **Limpar filtros** retorna ao histórico
+completo a partir da primeira página. Alterar campos oculta resultados anteriores
+até aplicar a nova consulta. As opções incluem contas arquivadas e categorias
+desativadas, preservando o acesso ao histórico; carregue mais opções quando houver
+ou atualize as listas pelos botões do formulário.
+
+Uma lista vazia após sucesso significa que nenhum registro atende aos filtros;
+indisponibilidade mostra erro. Efetivar, editar ou excluir refaz a consulta com o
+filtro aplicado, reiniciando a paginação. Criar um movimento também atualiza essa
+consulta. Filtros do histórico não alteram a consulta separada de saldo.
+
+```http
+GET /api/v1/transactions?q=mercado&status=posted&type=expense&date_from=2026-01-01&date_to=2026-01-31&limit=50&offset=0
+```
+
+Os parâmetros opcionais `account_id`, `category_id`, `type`, `status`, `date_from`
+e `date_to` continuam disponíveis; `q` acrescenta a pesquisa por descrição. Os
+filtros são combinados e sempre delimitados pelo usuário da sessão. IDs de outro
+usuário não fornecem acesso. Registros excluídos ficam fora. Consulta com `q`
+vazio, somente espaços, caracteres de controle ou mais de 255 caracteres retorna
+422; omitir `q` preserva o comportamento anterior. Datas invertidas também retornam
+422. A API mantém paginação e respostas `no-store`, sem mudança de schema.
+
+A aplicação remove a query string dos logs de acesso padrão do Uvicorn, mantendo
+método, caminho e status. Formatos de log desconhecidos são suprimidos. A pesquisa
+é mantida apenas em memória na interface. Na configuração de proxies, APM e outros
+servidores HTTP, registre somente o caminho, sem argumentos da URL ou corpo da
+requisição: a descrição pesquisada pode conter informação financeira privada.
 
 ### Usar a tela de lançamentos
 
@@ -1207,10 +1384,10 @@ de acesso limpa a intenção em memória: consulte o histórico antes de começa
 Nada desse estado é gravado em localStorage/sessionStorage; cookies e CSRF seguem
 o controle de sessão existente.
 
-O banco de destino precisa estar na revisão `0009_transaction_requests` para criar
+O banco de destino precisa incluir a revisão `0010_transaction_deletion` para os fluxos atuais de
 lançamentos com segurança. A interface e o startup não aplicam a migration ao banco
-pessoal. Não há nova migration ou dependência para a interface, edição ou
-efetivação de lançamentos. Exclusão e criação de transferências continuam pendentes.
+pessoal. A exclusão acrescenta a migration `0010_transaction_deletion`; não há
+nova dependência. Transferências usam a migração0011 e a área descrita abaixo.
 
 ### Editar um lançamento manual
 
@@ -1233,7 +1410,7 @@ Lançamentos vinculados à importação não são editados por este fluxo manual
 Saldos são derivados: mudar valor, tipo, conta ou data de um efetivado recalcula
 as posições nas contas e datas envolvidas, sem outra linha financeira. O digest
 da criação permanece intacto; repetir a chave e o corpo originais retorna o mesmo
-ID sem restaurar dados antigos. Não há endpoint DELETE nesta entrega.
+ID sem restaurar dados antigos. Se já foi excluído, o replay retorna 410 sem recriar.
 
 A interface bloqueia ações paralelas de cadastro/edição/efetivação. Em resposta
 incerta ou conflito, consulte **Recarregar situação**: a consulta substitui o
@@ -1242,6 +1419,209 @@ salvos, a tela reconhece o resultado; caso contrário exige nova revisão e aç�
 explícita. Isso não constitui comprovante de autoria de uma edição. O histórico
 é recarregado desde a primeira página para preservar a ordem após mudar datas,
 e o saldo anterior é ocultado até nova consulta. Não há rascunhos em storage.
+
+### Excluir um lançamento manual
+
+Use **Excluir** no histórico para consultar os dados atuais e confirme em
+**Confirmar exclusão**. Cancelar fecha o painel sem enviar o pedido. O movimento
+sai das listagens e do cálculo de saldo; excluir um planejado não modifica o
+saldo real. Contas ou categorias arquivadas não impedem corrigir o histórico
+pela exclusão de um lançamento manual. Não há restauração pela interface/API.
+
+Na API, `DELETE /api/v1/transactions/{id}` exige corpo JSON `{}`, sessão viva,
+origem autorizada, CSRF e `If-Match` da consulta individual. Retorna 204 sem
+corpo; um registro ativo com snapshot divergente retorna 412 e precisa ser
+consultado e confirmado novamente. Repetir a exclusão de um registro próprio
+já excluído retorna 204, com sessão/CSRF e formato de If-Match ainda obrigatórios,
+sem outro efeito financeiro. Recurso alheio ou inexistente retorna o mesmo 404.
+Corpo extra/headers inválidos retornam 422; o JSON é limitado e usa `no-store`.
+Lançamentos vinculados à importação não podem ser excluídos por este fluxo.
+
+Após excluir, GET, PATCH, efetivação e replay da chave/corpo originais de criação
+retornam 410 para o proprietário. Uma chave com corpo divergente continua 409.
+Nenhuma dessas operações restaura o movimento ou altera seu status/valor/data.
+Em resposta incerta, a tela bloqueia outra exclusão até **Recarregar situação**:
+um GET 410 reconhece o registro excluído sem outro DELETE. O histórico reinicia
+a paginação e o saldo anterior é ocultado para nova consulta.
+
+A exclusão é lógica: o registro completo, suas referências e chaves de criação
+permanecem internamente para preservar integridade e impedir recriação por retry.
+Isso inclui textos e valores financeiros. Não há expurgo automático nem exclusão
+definitiva de dados pessoais nesta entrega; política de retenção e fluxo de
+apagamento precisam ser definidos antes da produção. A marca não é exposta
+como campo editável. Não remova chaves nem referências para apagar fisicamente
+esses registros sem um desenho específico de retenção/idempotência.
+
+#### Migração e conferência no DBeaver
+
+A migration `0010_transaction_deletion`, filha de `0009_transaction_requests`,
+adiciona uma coluna nullable `timestamp with time zone`, com NULL nos registros
+existentes. Não cria tabelas ou dados. Startup não aplica migrations. A aplicação
+ao banco pessoal continua sendo uma operação separada; esta entrega a valida
+somente em PostgreSQL descartável com dados sintéticos.
+
+Consultas somente de leitura para conferir um banco já migrado:
+
+```sql
+SELECT version_num FROM public.alembic_version;
+
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'transactions'
+  AND column_name = 'deleted_at';
+
+SELECT count(*) FILTER (WHERE deleted_at IS NULL) AS active_movements,
+       count(*) FILTER (WHERE deleted_at IS NOT NULL) AS retained_deleted_movements
+FROM public.transactions;
+```
+
+Espere revisão `0010_transaction_deletion` ou posterior, coluna `deleted_at` nullable, sem
+default e do tipo `timestamp with time zone`. Logo após migrar, o número de
+excluídos retidos é zero; o número de ativos corresponde às linhas existentes.
+Os totais refletem o banco consultado, sem listar descrições ou valores.
+
+O downgrade para 0009 bloqueia escritas na tabela e recusa a operação quando há
+qualquer marca de exclusão, para impedir que valores excluídos retornem ao saldo.
+Não limpe essas marcas para contornar a proteção. Sem exclusões retidas, o
+downgrade remove somente a coluna e preserva dados financeiros. Não aplique
+rollback automaticamente a um banco em uso.
+
+## Transferências entre contas próprias
+
+Na área **Transferências**, selecione origem e destino distintos, valor positivo
+em BRL, data e situação explícita. As duas contas precisam estar ativas e a data
+deve ser posterior à abertura de ambas. A abertura representa a posição ao fim
+do dia. A descrição é opcional, com até 255 caracteres. Valores são enviados
+como strings decimais; o servidor usa Decimal/NUMERIC.
+
+Uma transferência efetivada é uma única linha: sai da origem e entra no destino
+na mesma data. Os saldos são derivados dessa linha, sem gerar receita/despesa
+ou alterar saldos acumulados. A soma das duas contas permanece igual. Uma
+transferência planejada fica fora do saldo real; não há efetivação automática.
+Este cadastro registra uma movimentação no FinSight, sem enviar dinheiro a bancos.
+
+O histórico mostra nomes das contas, valor, data e situação, com paginação.
+Consulte o saldo de cada conta na data desejada. Transferências planejadas podem
+ser efetivadas por confirmação explícita, descrita abaixo. Edição e exclusão de
+transferências ainda não estão disponíveis. Contas arquivadas preservam o histórico.
+
+### Efetivar uma transferência planejada
+
+Use **Efetivar transferência** no histórico. A tela consulta o estado atual e
+mostra origem, destino, valor e data antes de **Confirmar efetivação**. A operação
+muda somente a situação na mesma linha: o valor passa a compor os dois saldos na
+data econômica original. Não troca a data por hoje, não cria outra transferência
+e não transforma o movimento em receita/despesa. Planejadas vencidas continuam
+planejadas até a confirmação. Valores com data posterior à consulta de saldo
+continuam fora dessa posição, mesmo após efetivar.
+
+`GET /api/v1/transfers/{id}` retorna `ETag`. Envie
+`POST /api/v1/transfers/{id}/post` com JSON `{}`, sessão viva, origem autorizada,
+CSRF e esse ETag em `If-Match`. A resposta200 contém a transferência e o novo
+ETag. Header ausente/inválido ou corpo extra retorna422, snapshot divergente412,
+recurso alheio/inexistente o mesmo404. Respostas usam `no-store`; CORS expõe ETag
+para as origens permitidas. Não é possível alterar valor, data ou contas no corpo.
+
+Usuário/sessão, transferência e duas contas são bloqueados na transação. A nova
+efetivação revalida contas próprias, distintas, ativas e BRL, com data posterior
+à abertura de ambas. Renomear uma conta durante a confirmação invalida o snapshot
+e exige nova revisão. A falha de commit preserva a situação planejada e os saldos.
+
+Repetir a confirmação do mesmo snapshot planejado, quando só a situação mudou,
+ou do snapshot efetivado atual retorna o registro já efetivado sem novo efeito.
+Isso também permite reconhecer o resultado depois de arquivar as contas. Outras
+mudanças na representação exigem releitura. O digest original da criação não é
+alterado: repetir a chave/corpo planejados retorna o mesmo ID já efetivado, sem
+restaurar a situação anterior. Não há reversão para planejada por esta operação.
+
+Conflito, rejeição ou resultado incerto bloqueiam outra confirmação até
+**Recarregar situação**. A leitura reconhece uma efetivação concluída sem enviar
+outro POST; se ainda planejada, exige conferir e confirmar novamente. O saldo
+anterior é ocultado, o histórico é atualizado e fechar devolve o foco ao título.
+Cadastro/paginação e outras confirmações ficam bloqueados enquanto o painel
+está aberto; uma criação pendente impede abrir nova confirmação. Não há novo
+storage, dependência, tabela ou migration. O destino mantém a exigência existente
+de revisão0011; startup não migra nem altera o banco pessoal automaticamente.
+
+### Contrato e repetição segura
+
+`POST /api/v1/transfers` exige sessão viva, origem autorizada, CSRF e
+`Idempotency-Key` UUIDv4 canônica. Corpo JSON:
+
+```json
+{
+  "from_account_id": "10000000-0000-4000-8000-000000000001",
+  "to_account_id": "10000000-0000-4000-8000-000000000002",
+  "amount": "500.00",
+  "status": "posted",
+  "effective_date": "2026-01-04",
+  "description": "Movimentação entre contas próprias"
+}
+```
+
+Os IDs acima são fictícios; utilize IDs das suas contas. O cliente não define
+proprietário. A resposta 201 contém apenas `id`, com `Location` do recurso.
+Usuário/sessão e contas são bloqueados na transação; ambas as referências são
+validadas como próprias, ativas e BRL. Transferência e memória da chave são
+gravadas atomicamente. Se o commit falhar, nenhuma das contas é afetada.
+
+Repetir a mesma chave e os mesmos dados normalizados retorna o ID original sem
+nova transferência, mesmo se uma conta foi arquivada depois. A mesma chave com
+outros dados retorna 409. Usuários e tipos de recurso têm espaços de chave
+separados. Nunca descarte a chave para repetir um pedido de resultado incerto.
+
+Na interface, chave e dados ficam em memória desde antes do envio, preservados
+na navegação e após erro em uma repetição. A ação **Conferir e repetir
+transferência** conserva ambos. Encerrar uma intenção não cancela uma operação
+já salva. Sair, expirar a sessão, mudar de acesso ou recarregar limpa a intenção;
+confira o histórico antes de iniciar outra. Não há storage de pedidos ou tokens.
+O saldo anterior é ocultado ao tentar cadastrar e após confirmar o resultado.
+
+`GET /api/v1/transfers/{id}` permite apenas recursos próprios; alheio e inexistente
+retornam o mesmo 404. `GET /api/v1/transfers` usa `limit` padrão 50/máximo 100,
+`offset` e `has_more`, ordenando por data, criação e UUID decrescentes. A API
+aceita `account_id` (origem ou destino), `status`, `date_from` e `date_to`
+inclusivos. Intervalo invertido é inválido. A lista também é delimitada ao usuário.
+Campos extras, contas/datas inválidas ou chave ausente/inválida retornam 422;
+CSRF/origem inválidos retornam 403, limite 429 e indisponibilidade 503. Corpos
+JSON são limitados; respostas usam `no-store` e não ecoam entradas financeiras.
+
+### Migração 0011 e DBeaver
+
+`0011_transfer_requests`, filha de `0010_transaction_deletion`, cria
+`transfer_creation_requests` com usuário/chave como PK, digest SHA-256, ID da
+transferência e instante UTC. A FK composta garante proprietário e transferência
+compatíveis, com RESTRICT. A unicidade proprietário/id é acrescentada à tabela
+`transfers`; nenhuma linha financeira existente é modificada. Há quinze tabelas
+físicas incluindo o controle do Alembic.
+
+O banco de destino precisa de 0011 para as rotas de transferência. Startup e
+interface não aplicam migrations; esta entrega valida somente em PostgreSQL
+descartável, sem aplicação ao banco pessoal. Consultas somente de leitura:
+
+```sql
+SELECT version_num FROM public.alembic_version;
+
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'transfer_creation_requests'
+ORDER BY ordinal_position;
+
+SELECT conname, pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conrelid = 'public.transfer_creation_requests'::regclass
+ORDER BY conname;
+
+SELECT count(*) AS retained_transfer_creation_requests
+FROM public.transfer_creation_requests;
+```
+
+Em um banco recém-migrado, espere revisão0011, cinco colunas não nulas, PK
+composta, FKs de usuário/transferência própria, checks de digest/UUIDv4 e zero
+chaves criadas automaticamente. Não há credenciais ou corpo JSON nessa tabela.
+O downgrade bloqueia e recusa remover uma memória de criação não vazia, evitando
+duplicação por perda de idempotência. Não apague chaves para contornar o guard;
+retenção/expurgo e exclusão de transferências precisam de desenho específico.
 
 ### Efetivar um lançamento planejado
 

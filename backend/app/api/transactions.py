@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Response
-from pydantic import SecretStr
+from pydantic import UUID4, SecretStr
 
 from app.api.dependencies import get_session_service
 from app.api.financial_auth import creation_key
@@ -13,6 +13,8 @@ from app.api.financial_auth import financial_access as account_access
 from app.api.financial_auth import financial_mutation as category_mutation
 from app.schemas.transactions import (
     AccountBalanceResponse,
+    ConsolidatedBalanceResponse,
+    ProjectedBalanceResponse,
     TransactionCreatedResponse,
     TransactionInput,
     TransactionListResponse,
@@ -56,6 +58,7 @@ def list_transactions(
     status: Literal["planned", "posted"] | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    q: Annotated[str | None, Query(min_length=1, max_length=255)] = None,
 ):
     return service.list(
         token,
@@ -67,6 +70,7 @@ def list_transactions(
         status=status,
         date_from=date_from,
         date_to=date_to,
+        search=q,
     )
 
 
@@ -112,6 +116,51 @@ def post_transaction(
     result = service.post(token, transaction_id, etag)
     response.headers["ETag"] = transaction_etag(result)
     return result
+
+
+@router.delete("/{transaction_id}", status_code=204)
+def delete_transaction(
+    transaction_id: UUID,
+    data: TransactionPostInput,
+    token: Annotated[SecretStr, Depends(category_mutation)],
+    service: Annotated[TransactionService, Depends(transaction_service)],
+    etag: Annotated[
+        str, Header(alias="If-Match", min_length=66, max_length=66, pattern=r'^"[0-9a-f]{64}"$')
+    ],
+):
+    service.delete(token, transaction_id, etag)
+    return Response(status_code=204)
+
+
+@balance_router.get("/balances/consolidated", response_model=ConsolidatedBalanceResponse)
+def get_consolidated_balance(
+    as_of: date,
+    token: Annotated[SecretStr, Depends(account_access)],
+    service: Annotated[TransactionService, Depends(transaction_service)],
+    scope: Literal["active", "all", "selected"] = "active",
+    account_id: Annotated[list[UUID4] | None, Query(max_length=100)] = None,
+):
+    return service.consolidated_balance(token, as_of=as_of, scope=scope, account_ids=account_id)
+
+
+@balance_router.get("/balances/projected", response_model=ProjectedBalanceResponse)
+def get_projected_balance(
+    base_date: date,
+    target_date: date,
+    overdue_policy: Literal["include", "exclude"],
+    token: Annotated[SecretStr, Depends(account_access)],
+    service: Annotated[TransactionService, Depends(transaction_service)],
+    scope: Literal["active", "all", "selected"] = "active",
+    account_id: Annotated[list[UUID4] | None, Query(max_length=100)] = None,
+):
+    return service.projected_balance(
+        token,
+        base_date=base_date,
+        target_date=target_date,
+        overdue_policy=overdue_policy,
+        scope=scope,
+        account_ids=account_id,
+    )
 
 
 @balance_router.get("/{account_id}/balance", response_model=AccountBalanceResponse)

@@ -34,7 +34,13 @@ def is_transaction_path(path: str) -> bool:
 
 
 def is_financial_path(path: str) -> bool:
-    return is_account_path(path) or is_category_path(path) or is_transaction_path(path)
+    return (
+        is_account_path(path)
+        or is_category_path(path)
+        or is_transaction_path(path)
+        or path == "/api/v1/transfers"
+        or path.startswith("/api/v1/transfers/")
+    )
 
 
 def is_session_path(path: str) -> bool:
@@ -124,7 +130,10 @@ class SessionHttpMiddleware:
             return
         if scope["method"] != "POST" and not (
             (scope["path"] == PROFILE_PATH or is_financial_path(scope["path"]))
-            and scope["method"] == "PATCH"
+            and (
+                scope["method"] == "PATCH"
+                or (is_transaction_path(scope["path"]) and scope["method"] == "DELETE")
+            )
         ):
             await self.app(scope, receive, no_store)
             return
@@ -192,7 +201,7 @@ class SessionCorsMiddleware:
             app,
             allow_origins=[str(origin).rstrip("/") for origin in settings.auth_allowed_origins],
             allow_credentials=True,
-            allow_methods=["GET", "POST", "PATCH"],
+            allow_methods=["GET", "POST", "PATCH", "DELETE"],
             allow_headers=["Accept", "Content-Type", "X-CSRF-Token", "Idempotency-Key", "If-Match"],
             expose_headers=["ETag"],
         )

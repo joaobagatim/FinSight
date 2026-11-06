@@ -62,19 +62,21 @@ export default function TransactionForm({
       else {
         onIntent({
           ...pending,
-          conflict: failure.status === 409,
-          uncertain: pending.uncertain || ![403, 422, 429, 409].includes(failure.status),
+          conflict: [409, 410].includes(failure.status),
+          uncertain: pending.uncertain || ![403, 422, 429, 409, 410].includes(failure.status),
           rejected: [403, 422].includes(failure.status),
         })
         setError(
-          failure.status === 409
-            ? 'Esta tentativa tem dados diferentes dos já recebidos. Confira o histórico antes de iniciar outro cadastro.'
-            : failure.status === 422
-              ? 'Confira se a conta e a categoria continuam ativas, se os tipos são compatíveis e se a data é posterior à abertura.'
-              : errorMessage(
-                  failure,
-                  'Não foi possível confirmar o cadastro. Confira os dados e tente novamente.',
-                ),
+          failure.status === 410
+            ? 'O lançamento desta tentativa foi excluído. A repetição não criou outro. Confira o histórico e encerre esta tentativa.'
+            : failure.status === 409
+              ? 'Esta tentativa tem dados diferentes dos já recebidos. Confira o histórico antes de iniciar outro cadastro.'
+              : failure.status === 422
+                ? 'Confira se a conta e a categoria continuam ativas, se os tipos são compatíveis e se a data é posterior à abertura.'
+                : errorMessage(
+                    failure,
+                    'Não foi possível confirmar o cadastro. Confira os dados e tente novamente.',
+                  ),
         )
       }
     } finally {

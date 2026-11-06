@@ -15,7 +15,9 @@ from app.api.health import router as health_router
 from app.api.session_auth import router as session_router
 from app.api.transactions import balance_router
 from app.api.transactions import router as transactions_router
+from app.api.transfers import router as transfers_router
 from app.api.users import router as users_router
+from app.core.access_logging import install_access_log_privacy
 from app.core.auth_cookies import CookiePolicyRejected
 from app.core.config import Settings
 from app.core.csrf import CsrfConfigurationError, CsrfRejected
@@ -42,11 +44,19 @@ from app.services.transactions import (
     TransactionConflict,
     TransactionNotFound,
     TransactionRejected,
+    TransactionRemoved,
     TransactionStale,
+)
+from app.services.transfers import (
+    TransferConflict,
+    TransferNotFound,
+    TransferRejected,
+    TransferStale,
 )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    install_access_log_privacy()
     settings = settings if settings is not None else Settings()
     limits = RegistrationLimits(settings)
     session_limits = SessionHttpLimits(settings)
@@ -128,6 +138,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def category_stale(_request, _error):
         return JSONResponse({"detail": "Category changed; reload before updating"}, status_code=412)
 
+    @application.exception_handler(TransferNotFound)
+    async def transfer_not_found(_request, _error):
+        return JSONResponse({"detail": "Transfer not found"}, status_code=404)
+
+    @application.exception_handler(TransferRejected)
+    async def transfer_rejected(_request, _error):
+        return JSONResponse({"detail": "Invalid transfer accounts or date"}, status_code=422)
+
+    @application.exception_handler(TransferConflict)
+    async def transfer_conflict(_request, _error):
+        return JSONResponse({"detail": "Idempotency key conflict"}, status_code=409)
+
+    @application.exception_handler(TransferStale)
+    async def transfer_stale(_request, _error):
+        return JSONResponse({"detail": "Transfer changed; reload before posting"}, status_code=412)
+
     @application.exception_handler(TransactionNotFound)
     async def transaction_not_found(_request, _error):
         return JSONResponse({"detail": "Transaction not found"}, status_code=404)
@@ -145,6 +171,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             {"detail": "Transaction changed; reload before updating"}, status_code=412
         )
+
+    @application.exception_handler(TransactionRemoved)
+    async def transaction_removed(_request, _error):
+        return JSONResponse({"detail": "Transaction removed"}, status_code=410)
 
     @application.exception_handler(Exception)
     async def unexpected_error(request, _error):
@@ -178,5 +208,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(accounts_router)
     application.include_router(categories_router)
     application.include_router(transactions_router)
+    application.include_router(transfers_router)
     application.include_router(balance_router)
     return application
