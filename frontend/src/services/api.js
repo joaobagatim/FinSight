@@ -120,6 +120,27 @@ async function authenticatedRead(path) {
 }
 
 export const api = {
+  deleteTransfer: (ownerId, id, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const remove = async () => {
+        const csrf = await bootstrap()
+        return send(`/transfers/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          data: {},
+          headers: { 'If-Match': etag, 'X-CSRF-Token': csrf },
+        })
+      }
+      try {
+        return await remove()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return remove()
+      }
+    }),
   updateTransfer: (ownerId, id, data, etag) =>
     coordinated(async () => {
       const profile = await renewUnlocked()

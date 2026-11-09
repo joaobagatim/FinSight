@@ -6,6 +6,7 @@ import TransferForm from '@/components/TransferForm'
 import AccountBalance from '@/components/AccountBalance'
 import PostTransferPanel from '@/components/PostTransferPanel'
 import EditTransferPanel from '@/components/EditTransferPanel'
+import DeleteTransferPanel from '@/components/DeleteTransferPanel'
 
 export default function TransfersPanel({ ownerId, onExpired, intent, onIntent }) {
   const [accounts, setAccounts] = useState({ items: [], has_more: false })
@@ -16,7 +17,8 @@ export default function TransfersPanel({ ownerId, onExpired, intent, onIntent })
   const [balanceRevision, setBalanceRevision] = useState(0)
   const [postingId, setPostingId] = useState(null)
   const [editingId, setEditingId] = useState(null)
-  const actionOpen = Boolean(postingId || editingId)
+  const [deletingId, setDeletingId] = useState(null)
+  const actionOpen = Boolean(postingId || editingId || deletingId)
   const heading = useRef(null)
   const changed = useCallback(() => setBalanceRevision((value) => value + 1), [])
   const resolved = useCallback(
@@ -166,6 +168,21 @@ export default function TransfersPanel({ ownerId, onExpired, intent, onIntent })
               }}
             />
           )}
+          {deletingId && (
+            <DeleteTransferPanel
+              key={deletingId}
+              ownerId={ownerId}
+              transferId={deletingId}
+              disabled={Boolean(intent)}
+              onExpired={onExpired}
+              onRemoved={edited}
+              onAttempt={changed}
+              onClose={() => {
+                setDeletingId(null)
+                heading.current?.focus()
+              }}
+            />
+          )}
           <ul className="account-cards" aria-label="Transferências cadastradas">
             {history.items.map((item) => (
               <li key={item.id} className="surface account-card">
@@ -189,6 +206,15 @@ export default function TransfersPanel({ ownerId, onExpired, intent, onIntent })
                   </div>
                 </dl>
                 <div className="account-actions">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={loading || Boolean(intent) || actionOpen}
+                    onClick={() => setDeletingId(item.id)}
+                  >
+                    Excluir transferência
+                  </Button>
                   <Button
                     type="button"
                     variant="outline"
@@ -226,7 +252,8 @@ export default function TransfersPanel({ ownerId, onExpired, intent, onIntent })
           <p className="field-hint">
             Transferências não criam receita ou despesa. Planejadas exigem confirmação para entrar
             nos saldos. A edição mantém a situação e corrige contas, valor e data com revisão. A
-            exclusão será disponibilizada em etapa própria.
+            exclusão exige confirmação e retira os dois lados dos cálculos, preservando o registro
+            internamente para impedir duplicidades.
           </p>
         </section>
       </div>
@@ -252,7 +279,7 @@ export default function TransfersPanel({ ownerId, onExpired, intent, onIntent })
           <Button
             type="button"
             variant="outline"
-            disabled={loading || Boolean(postingId)}
+            disabled={loading || Boolean(postingId) || Boolean(deletingId)}
             onClick={() => more('accounts')}
           >
             Carregar mais contas para transferência

@@ -328,7 +328,8 @@ financeiro é criado pelas migrations.
 
 `0011_transfer_requests` acrescenta a tabela técnica `transfer_creation_requests`
 e a chave composta proprietário/id em `transfers`, preservando transferências
-existentes. O schema atual tem quinze tabelas físicas, incluindo `alembic_version`.
+existentes. `0012_transfer_deletion` acrescenta o marcador nullable de exclusão
+lógica em transferências. O schema atual tem quinze tabelas físicas, incluindo `alembic_version`.
 O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
 domínio estão modeladas; autenticação HTTP e cadastro/consulta de contas próprias
 estão disponíveis. Os demais recursos financeiros ainda serão implementados.
@@ -358,7 +359,7 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0011_transfer_requests` e as quinze tabelas `alembic_version`, `users`,
+`0012_transfer_deletion` e as quinze tabelas `alembic_version`, `users`,
 `user_sessions`, `accounts`, `categories`, `import_jobs`, `import_rows`,
 `transactions`, `transfers`, `financial_goals`, `goal_allocations` e
 `refresh_token_history`, `account_creation_requests`, `transaction_creation_requests`
@@ -1084,7 +1085,7 @@ SELECT count(*) AS persisted_creation_requests
 FROM public.account_creation_requests;
 ```
 
-Resultado esperado em um banco recém-migrado: revisão `0011_transfer_requests`,
+Resultado esperado em um banco recém-migrado: revisão `0012_transfer_deletion`,
 cinco colunas não nulas, chave primária composta, duas chaves estrangeiras,
 verificações de digest/UUIDv4 e zero registros. Nenhuma conta, usuário ou chave é
 criada automaticamente. A API continua sem executar migrations no startup.
@@ -1625,6 +1626,63 @@ Duplo clique é bloqueado; criação e efetivação ficam indisponíveis enquant
 edição está aberta. Esse fluxo não cria auditoria imutável de todas as versões
 anteriores. Não há nova migração ou aplicação de schema ao banco pessoal.
 A exclusão de transferências permanece para uma etapa própria.
+
+### Excluir uma transferência
+
+Na área **Transferências**, escolha **Excluir transferência**. A confirmação
+consulta os dados atuais e mostra origem, destino, valor, data e situação. É possível
+cancelar sem enviar a exclusão. Após confirmar, a transferência sai do histórico
+e deixa de participar dos cálculos: efetivadas saem do saldo das duas contas e
+da evolução diária; planejadas saem das projeções. Nenhuma receita ou despesa é
+criada. Contas arquivadas também permitem remover uma transferência existente.
+
+A ação não tem desfazer pela interface. O registro e a identidade original de
+criação permanecem retidos internamente para impedir que uma tentativa antiga de
+cadastro recrie dinheiro. Isso é exclusão lógica, sem apagamento definitivo dos dados.
+
+`DELETE /api/v1/transfers/{id}` exige sessão própria válida, Origin permitido,
+`X-CSRF-Token`, `If-Match` da última consulta e corpo JSON vazio `{}`.
+Retorna `204` sem corpo; repetir a exclusão de um registro já removido também
+retorna `204` para o dono autenticado. Uma versão antiga de um registro ainda
+ativo retorna `412`; é necessário consultar, revisar e confirmar novamente.
+GET/PATCH/efetivação de uma transferência removida retornam `410` para o dono;
+outro usuário recebe `404`. Repetir a criação original retorna `410`, enquanto
+reutilizar a chave com outro conteúdo continua retornando `409`.
+
+Após erro ou resposta perdida, o formulário bloqueia outra exclusão até
+**Recarregar situação** consultar o servidor. Se a transferência já foi removida,
+mostra esse estado sem reenviar DELETE; se ainda existe, mostra os dados atuais
+para uma nova confirmação. Duplo clique não envia duas exclusões. O histórico e
+a consulta de saldo são invalidados após a tentativa e atualizados após confirmação.
+
+### Migração 0012 e verificação no DBeaver
+
+`0012_transfer_deletion`, filha de `0011_transfer_requests`, acrescenta somente
+`transfers.deleted_at` como `TIMESTAMPTZ` nullable. Transferências existentes
+permanecem com marcador nulo; valores, vínculos e chaves de criação são preservados.
+O schema continua com quinze tabelas. O banco de destino precisa dessa revisão
+antes de executar a versão atual. Startup não aplica migrações automaticamente.
+Nenhuma migração é aplicada ao banco pessoal por esta implementação.
+
+Depois de revisar a configuração de destino e aplicar a migração nesse ambiente,
+as consultas abaixo verificam a estrutura sem exibir movimentações financeiras:
+
+```sql
+SELECT current_database();
+SELECT version_num FROM public.alembic_version;
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'transfers'
+  AND column_name = 'deleted_at';
+```
+
+Espere revisão `0012_transfer_deletion` ou posterior e uma coluna `deleted_at`,
+tipo `timestamp with time zone`, `is_nullable = YES`. As consultas são somente
+de leitura. Não remova o marcador manualmente: isso recolocaria a transferência
+nos cálculos. O downgrade recusa remover a coluna enquanto houver registros
+marcados, evitando restauração involuntária de valores; não apaga dados para
+forçar rollback. Nenhuma dependência nova foi adicionada.
+
 
 ### Contrato e repetição segura
 
