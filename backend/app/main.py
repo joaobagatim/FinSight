@@ -51,6 +51,7 @@ from app.services.transfers import (
     TransferConflict,
     TransferNotFound,
     TransferRejected,
+    TransferRemoved,
     TransferStale,
 )
 
@@ -152,7 +153,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.exception_handler(TransferStale)
     async def transfer_stale(_request, _error):
-        return JSONResponse({"detail": "Transfer changed; reload before posting"}, status_code=412)
+        return JSONResponse(
+            {"detail": "Transfer changed; reload before proceeding"}, status_code=412
+        )
+
+    @application.exception_handler(TransferRemoved)
+    async def transfer_removed(_request, _error):
+        return JSONResponse({"detail": "Transfer removed"}, status_code=410)
 
     @application.exception_handler(TransactionNotFound)
     async def transaction_not_found(_request, _error):
