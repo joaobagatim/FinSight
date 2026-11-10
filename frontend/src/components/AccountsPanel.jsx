@@ -200,6 +200,15 @@ export default function AccountsPanel({ ownerId, onExpired }) {
                   variant="outline"
                   size="sm"
                   disabled={saving || Boolean(pending) || Boolean(editing)}
+                  onClick={() => setEditing({ id: account.id, opening: true })}
+                >
+                  Corrigir abertura
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={saving || Boolean(pending) || Boolean(editing)}
                   onClick={() => setEditing({ id: account.id })}
                 >
                   Editar
@@ -225,13 +234,13 @@ export default function AccountsPanel({ ownerId, onExpired }) {
           </Button>
         )}
         <p className="field-hint">
-          Os valores acima são saldos iniciais. Receitas, despesas e saldos atualizados estarão
-          disponíveis em outra etapa.
+          Os valores acima são posições iniciais. Consulte movimentos em Lançamentos e saldos
+          calculados em Saldos. A correção da abertura só altera contas sem histórico vinculado.
         </p>
       </section>
       {editing ? (
         <EditAccountPanel
-          key={editing.id + String(editing.archive)}
+          key={editing.id + String(editing.archive) + String(editing.opening)}
           ownerId={ownerId}
           intent={editing}
           onExpired={onExpired}

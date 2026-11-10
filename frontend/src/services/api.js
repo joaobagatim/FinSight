@@ -120,6 +120,35 @@ async function authenticatedRead(path) {
 }
 
 export const api = {
+  correctAccountOpening: (ownerId, id, data, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send(`/accounts/${encodeURIComponent(id)}/opening`, {
+          method: 'PATCH',
+          data,
+          versioned: true,
+          headers: { 'If-Match': etag, 'X-CSRF-Token': await bootstrap() },
+        })
+        if (
+          result.data?.id !== id ||
+          result.data.opening_balance !== data.opening_balance ||
+          result.data.opening_date !== data.opening_date
+        )
+          throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
+
   deleteTransfer: (ownerId, id, etag) =>
     coordinated(async () => {
       const profile = await renewUnlocked()

@@ -787,7 +787,8 @@ fieldset {
 }
 
 .transfer-edit-panel button,
-.transfer-deletion-panel button {
+.transfer-deletion-panel button,
+.account-opening-editor button {
   max-width: 100%;
   min-height: 44px;
   height: auto;
