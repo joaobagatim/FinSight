@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.accounts import AccountInput, AccountUpdateInput
+from app.schemas.accounts import AccountInput, AccountOpeningInput, AccountUpdateInput
 
 BODY = {
     "name": " Synthetic account ",
@@ -65,3 +65,24 @@ def test_account_update_accepts_only_explicit_metadata_changes():
     ):
         with pytest.raises(ValidationError):
             AccountUpdateInput(**data)
+
+
+def test_opening_correction_requires_both_exact_values_without_metadata_or_owner_changes():
+    valid = {"opening_balance": "-0.00", "opening_date": "2026-01-02"}
+    assert AccountOpeningInput(**valid).model_dump(mode="json") == valid | {
+        "opening_balance": "0.00"
+    }
+    for changes in (
+        {"opening_balance": None},
+        {"opening_balance": 0.1},
+        {"opening_balance": "1.001"},
+        {"opening_balance": "NaN"},
+        {"opening_date": "2026-02-30"},
+        {"opening_date": None},
+        {"user_id": "other"},
+        {"name": "Other"},
+    ):
+        with pytest.raises(ValidationError):
+            AccountOpeningInput(**(valid | changes))
+    with pytest.raises(ValidationError):
+        AccountOpeningInput(opening_balance="1.00")

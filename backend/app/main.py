@@ -30,7 +30,12 @@ from app.core.session_http import (
 )
 from app.core.tokens import TokenConfigurationError
 from app.db.session import Database
-from app.services.accounts import AccountConflict, AccountNotFound, AccountStale
+from app.services.accounts import (
+    AccountConflict,
+    AccountNotFound,
+    AccountOpeningLocked,
+    AccountStale,
+)
 from app.services.categories import CategoryConflict, CategoryNotFound, CategoryStale
 from app.services.registration import RegistrationUnavailable
 from app.services.sessions import (
@@ -120,6 +125,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.exception_handler(AccountConflict)
     async def account_conflict(_request, _error):
         return JSONResponse({"detail": "Idempotency key conflict"}, status_code=409)
+
+    @application.exception_handler(AccountOpeningLocked)
+    async def account_opening_locked(_request, _error):
+        return JSONResponse(
+            {"detail": "Account opening is protected by existing history"}, status_code=409
+        )
 
     @application.exception_handler(AccountStale)
     async def account_stale(_request, _error):
