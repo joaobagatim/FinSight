@@ -20,10 +20,28 @@ from app.core.config import Settings
 from app.core.security import hash_password
 from app.db.session import Database
 from app.main import create_app
-from app.models import Account, AccountCreationRequest, Category, Transaction, User
-from app.schemas.accounts import AccountInput, AccountUpdateInput
-from app.services.accounts import AccountConflict, AccountService, AccountStale, account_etag
+from app.models import (
+    Account,
+    AccountCreationRequest,
+    Category,
+    FinancialGoal,
+    GoalAllocation,
+    ImportJob,
+    Transaction,
+    Transfer,
+    User,
+)
+from app.schemas.accounts import AccountInput, AccountOpeningInput, AccountUpdateInput
+from app.schemas.transactions import TransactionInput
+from app.services.accounts import (
+    AccountConflict,
+    AccountOpeningLocked,
+    AccountService,
+    AccountStale,
+    account_etag,
+)
 from app.services.sessions import AuthenticationDenied, SessionService, SessionUnavailable
+from app.services.transactions import TransactionRejected, TransactionService
 
 pytestmark = pytest.mark.postgres
 PASSWORD = "synthetic account password"
@@ -427,3 +445,211 @@ def test_session_revoked_before_user_lock_cannot_create_account(context, monkeyp
         with pytest.raises(AuthenticationDenied):
             future.result(timeout=20)
     assert counts(database, grant.context.user_id) == (0, 0)
+
+
+def test_opening_correction_http_is_conditional_owned_exact_and_preserves_creation_retry(context):
+    database, sessions, _, emails = context
+    stack, make = clients(context)
+    with stack:
+        owner, other = make(emails[0]), make(emails[1])
+        key = uuid4()
+        created = create(owner, key)
+        location = created.headers["location"]
+        snapshot = owner.get(location)
+        data = {"opening_balance": "1234.56", "opening_date": "2026-01-03"}
+        path = location + "/opening"
+        assert owner.patch(path, json=data).status_code == 403
+        assert patch(other, path, snapshot.headers["etag"], data).status_code == 404
+        changed = patch(owner, path, snapshot.headers["etag"], data)
+        assert changed.status_code == 200 and changed.json()["opening_balance"] == "1234.56"
+        assert changed.json()["opening_date"] == "2026-01-03"
+        assert changed.headers["etag"] != snapshot.headers["etag"]
+        assert changed.headers["cache-control"] == "no-store"
+        assert patch(owner, path, snapshot.headers["etag"], data).status_code == 412
+        assert create(owner, key).json()["id"] == created.json()["id"]
+        assert owner.get(location).json() == changed.json()
+        assert (
+            owner.get(location + "/balance", params={"as_of": "2026-01-04"}).json()["balance"]
+            == "1234.56"
+        )
+        assert owner.get(location + "/balance", params={"as_of": "2026-01-01"}).status_code == 422
+        assert (
+            patch(owner, path, changed.headers["etag"], data | {"name": "Other"}).status_code == 422
+        )
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = AccountService(sessions)
+    account_id = service.list(token, limit=50, offset=0).items[0].id
+    before = service.get(token, account_id)
+
+    def fail(_session):
+        raise SQLAlchemyError("synthetic opening rollback")
+
+    event.listen(database.sessions.class_, "before_commit", fail)
+    try:
+        with pytest.raises(SessionUnavailable):
+            service.correct_opening(
+                token,
+                account_id,
+                AccountOpeningInput(opening_balance="9.00", opening_date="2026-01-02"),
+                account_etag(before),
+            )
+    finally:
+        event.remove(database.sessions.class_, "before_commit", fail)
+    assert service.get(token, account_id) == before
+    sessions.revoke_by_access(token)
+    with pytest.raises(AuthenticationDenied):
+        service.correct_opening(
+            token,
+            account_id,
+            AccountOpeningInput(opening_balance="9.00", opening_date="2026-01-02"),
+            account_etag(before),
+        )
+
+
+def test_opening_correction_protects_retained_history_and_serializes_with_first_movement(context):
+    database, sessions, _, emails = context
+    grant = sessions.login(emails[0], PASSWORD)
+    token, owner = grant.access_token, grant.context.user_id
+    service = AccountService(sessions)
+    correction = AccountOpeningInput(opening_balance="42.00", opening_date="2026-01-03")
+    retained = []
+    try:
+        for kind in (
+            "transaction",
+            "removed_transaction",
+            "from_transfer",
+            "removed_to_transfer",
+            "cancelled_import",
+            "allocation",
+        ):
+            account_id = service.create(token, uuid4(), AccountInput(**(BODY | {"name": kind})))
+            with database.sessions.begin() as session:
+                if "transaction" in kind:
+                    category = Category(user_id=owner, name=kind, type="expense")
+                    session.add(category)
+                    session.flush()
+                    row = Transaction(
+                        user_id=owner,
+                        account_id=account_id,
+                        category_id=category.id,
+                        description="Synthetic opening guard",
+                        amount=Decimal("1.00"),
+                        type="expense",
+                        status="planned",
+                        effective_date=date(2026, 1, 2),
+                    )
+                elif "transfer" in kind:
+                    other = Account(
+                        user_id=owner,
+                        name="Other " + kind,
+                        type="cash",
+                        opening_balance=Decimal("0.00"),
+                        opening_date=date(2026, 1, 1),
+                    )
+                    session.add(other)
+                    session.flush()
+                    source, target = (
+                        (account_id, other.id)
+                        if kind == "from_transfer"
+                        else (other.id, account_id)
+                    )
+                    row = Transfer(
+                        user_id=owner,
+                        from_account_id=source,
+                        to_account_id=target,
+                        amount=Decimal("1.00"),
+                        status="planned",
+                        effective_date=date(2026, 1, 2),
+                    )
+                elif kind == "cancelled_import":
+                    row = ImportJob(
+                        user_id=owner,
+                        account_id=account_id,
+                        filename="synthetic.csv",
+                        file_type="csv",
+                        file_checksum="b" * 64,
+                        status="cancelled",
+                    )
+                else:
+                    goal = FinancialGoal(
+                        user_id=owner,
+                        name="Synthetic reserved goal",
+                        target_amount=Decimal("100.00"),
+                        status="active",
+                    )
+                    session.add(goal)
+                    session.flush()
+                    row = GoalAllocation(
+                        user_id=owner,
+                        account_id=account_id,
+                        goal_id=goal.id,
+                        amount=Decimal("1.00"),
+                        allocation_date=date(2026, 1, 2),
+                    )
+                if kind.startswith("removed"):
+                    row.deleted_at = func.now()
+                session.add(row)
+                session.flush()
+                if kind.startswith("removed"):
+                    retained.append((type(row), row.id))
+            before = service.get(token, account_id)
+            with pytest.raises(AccountOpeningLocked):
+                service.correct_opening(token, account_id, correction, account_etag(before))
+            assert service.get(token, account_id) == before
+            unchanged = AccountOpeningInput(
+                opening_balance=BODY["opening_balance"], opening_date=BODY["opening_date"]
+            )
+            assert (
+                service.correct_opening(token, account_id, unchanged, account_etag(before))
+                == before
+            )
+            service.update(
+                token, account_id, AccountUpdateInput(name=kind + " renamed"), account_etag(before)
+            )
+    finally:
+        # Synthetic retained markers only: allow the fixture's guarded schema cleanup.
+        assert database.engine.url.database.startswith("finsight_test_")
+        with database.sessions.begin() as session:
+            for model, identity in retained:
+                session.get(model, identity).deleted_at = None
+    account_id = service.create(token, uuid4(), AccountInput(**(BODY | {"name": "Race opening"})))
+    etag = account_etag(service.get(token, account_id))
+    with database.sessions.begin() as session:
+        category = Category(user_id=owner, name="Race category", type="expense")
+        session.add(category)
+        session.flush()
+        category_id = category.id
+    barrier = Barrier(2)
+
+    def correct():
+        barrier.wait(timeout=10)
+        try:
+            service.correct_opening(token, account_id, correction, etag)
+            return "corrected"
+        except AccountOpeningLocked:
+            return "locked"
+
+    def create_movement():
+        barrier.wait(timeout=10)
+        try:
+            TransactionService(sessions).create(
+                token,
+                uuid4(),
+                TransactionInput(
+                    account_id=str(account_id),
+                    category_id=str(category_id),
+                    description="Synthetic first movement",
+                    amount="1.00",
+                    type="expense",
+                    status="posted",
+                    effective_date="2026-01-02",
+                ),
+            )
+            return "created"
+        except TransactionRejected:
+            return "rejected"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(correct), executor.submit(create_movement)]
+        outcomes = [future.result(timeout=20) for future in futures]
+    assert outcomes in (["corrected", "rejected"], ["locked", "created"])

@@ -1871,6 +1871,45 @@ preserva o rascunho, bloqueia o envio e pede para recarregar e revisar os dados.
 Se uma resposta se perder, também exige consultar o estado antes de nova tentativa;
 não repete silenciosamente a alteração. Recarregar substitui o rascunho local.
 
+### Corrigir a posição de abertura de uma conta
+
+Em **Contas**, escolha **Corrigir abertura**. Confira a conta, informe o saldo
+inicial correto (negativo também é válido) e a data da posição, então confirme.
+A posição representa o saldo ao **final do dia** escolhido; movimentos posteriores
+serão calculados a partir dela. A edição comum de nome/tipo e o arquivamento
+continuam separados desta ação.
+
+A correção só altera a posição se não houver nenhum lançamento, transferência
+de entrada ou saída, importação ou reserva vinculada. São considerados também
+planejados, movimentos removidos e importações canceladas ou com falha. Arquivar
+a conta não apaga vínculos nem libera sua abertura. Não é possível usar este
+fluxo para esconder movimentos antigos ou ajustar o saldo atual de uma conta
+já movimentada. Referências históricas existentes permanecem protegidas.
+
+`PATCH /api/v1/accounts/{id}/opening` exige sessão própria, Origin permitido,
+CSRF, `If-Match` da consulta da conta e os dois campos `opening_balance` (string
+decimal exata) e `opening_date` (ISO). Não aceita nome, moeda, estado ou dono.
+Retorna a conta e o novo ETag. Conta alheia/ausente retorna404; snapshot antigo,
+412; tentativa de mudar abertura com vínculos,409, sem alteração. Reenviar os
+mesmos valores atuais, com ETag atual, apenas confirma a posição, mesmo com vínculos.
+
+A verificação e a alteração ocorrem na mesma transação, com os bloqueios de dono
+e conta também usados pelos serviços financeiros. Assim, uma correção concorrente
+com o primeiro movimento não pode invalidar sua data. Serviços futuros de
+importações/reservas devem manter essa coordenação antes de criar vínculos.
+Uma repetição da criação original da conta retorna seu ID e não restaura a
+posição antiga.
+
+Em conflito ou resposta incerta, o formulário bloqueia outro envio até
+**Recarregar dados** consultar a conta atual. A consulta não envia outra correção;
+confira os valores recebidos antes de confirmar novamente. Sair da tela abandona
+apenas o rascunho, sem cancelar uma gravação que já tenha sido concluída.
+
+Sem migração, nova dependência ou alteração automática do banco pessoal. O schema
+atual continua na revisão `0012_transfer_deletion`; contas já usadas mantêm seus
+saldos de abertura protegidos. Consulte o saldo calculado na área **Saldos**.
+
+
 ## Cadastrar, listar e consultar contas próprias
 
 A primeira entrega da Fase 2 implementa RF-010/RF-013:
