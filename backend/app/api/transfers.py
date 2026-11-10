@@ -84,6 +84,20 @@ def post_transfer(
     return result
 
 
+@router.delete("/{transfer_id}", status_code=204)
+def delete_transfer(
+    transfer_id: UUID,
+    data: TransferPostInput,
+    token: Annotated[SecretStr, Depends(financial_mutation)],
+    service: Annotated[TransferService, Depends(transfer_service)],
+    etag: Annotated[
+        str, Header(alias="If-Match", min_length=66, max_length=66, pattern=r'^"[0-9a-f]{64}"$')
+    ],
+):
+    service.delete(token, transfer_id, etag)
+    return Response(status_code=204)
+
+
 @router.get("", response_model=TransferListResponse)
 def list_transfers(
     token: Annotated[SecretStr, Depends(financial_access)],

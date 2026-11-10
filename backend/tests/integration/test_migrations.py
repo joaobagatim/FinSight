@@ -81,7 +81,7 @@ def test_deletion_migration_preserves_money_and_refuses_to_revive_removed_rows(p
                 command.downgrade(config, "0009_transaction_requests")
             assert (
                 MigrationContext.configure(connection).get_current_revision()
-                == "0011_transfer_requests"
+                == "0012_transfer_deletion"
             )
             assert connection.execute(
                 text("SELECT deleted_at IS NOT NULL FROM transactions WHERE id=:id"),
@@ -108,6 +108,80 @@ def test_deletion_migration_preserves_money_and_refuses_to_revive_removed_rows(p
         database.dispose()
 
 
+def test_transfer_deletion_migration_preserves_records_and_prevents_money_resurrection(
+    postgres_settings,
+):
+    database = Database(postgres_settings)
+    try:
+        with database.engine.begin() as connection:
+            config = Config(str(CONFIG_PATH))
+            config.attributes["connection"] = connection
+            command.upgrade(config, "0011_transfer_requests")
+            owner, source, target, transfer = [uuid4() for _ in range(4)]
+            connection.execute(
+                text(
+                    "INSERT INTO users(id,name,email,password_hash) "
+                    "VALUES (:id,'Synthetic','transfer-deletion@example.test','synthetic')"
+                ),
+                {"id": owner},
+            )
+            for account in (source, target):
+                connection.execute(
+                    text(
+                        "INSERT INTO accounts(id,user_id,name,type,opening_balance,opening_date) "
+                        "VALUES (:id,:owner,:name,'checking',1000,'2026-01-01')"
+                    ),
+                    {"id": account, "owner": owner, "name": str(account)},
+                )
+            connection.execute(
+                text(
+                    "INSERT INTO transfers(id,user_id,from_account_id,to_account_id,amount,"
+                    "status,effective_date) VALUES "
+                    "(:id,:owner,:source,:target,250.10,'posted','2026-01-04')"
+                ),
+                {"id": transfer, "owner": owner, "source": source, "target": target},
+            )
+            sql = text(
+                "SELECT id,user_id,from_account_id,to_account_id,amount,status,effective_date "
+                "FROM transfers WHERE id=:id"
+            )
+            before = connection.execute(sql, {"id": transfer}).one()
+            command.upgrade(config, "head")
+            assert connection.execute(sql, {"id": transfer}).one() == before
+            assert (
+                connection.execute(
+                    text("SELECT deleted_at FROM transfers WHERE id=:id"), {"id": transfer}
+                ).scalar_one()
+                is None
+            )
+            command.check(config)
+            connection.execute(
+                text("UPDATE transfers SET deleted_at=now() WHERE id=:id"), {"id": transfer}
+            )
+            with pytest.raises(CommandError), connection.begin_nested():
+                command.downgrade(config, "0011_transfer_requests")
+            assert (
+                MigrationContext.configure(connection).get_current_revision()
+                == "0012_transfer_deletion"
+            )
+            assert connection.execute(
+                text("SELECT deleted_at IS NOT NULL FROM transfers WHERE id=:id"), {"id": transfer}
+            ).scalar_one()
+            assert connection.execute(sql, {"id": transfer}).one() == before
+            # Synthetic fixture only: exercise downgrade without retained removal markers.
+            connection.execute(
+                text("UPDATE transfers SET deleted_at=NULL WHERE id=:id"), {"id": transfer}
+            )
+            command.downgrade(config, "0011_transfer_requests")
+            assert connection.execute(sql, {"id": transfer}).one() == before
+            command.upgrade(config, "head")
+            command.check(config)
+            command.downgrade(config, "base")
+            connection.exec_driver_sql("DROP TABLE alembic_version")
+    finally:
+        database.dispose()
+
+
 def test_upgrade_is_repeatable_downgrade_preserves_data_and_check_detects_drift(postgres_settings):
     database = Database(postgres_settings)
     try:
@@ -119,7 +193,7 @@ def test_upgrade_is_repeatable_downgrade_preserves_data_and_check_detects_drift(
             command.upgrade(config, "head")
             assert (
                 MigrationContext.configure(connection).get_current_revision()
-                == "0011_transfer_requests"
+                == "0012_transfer_deletion"
             )
             assert set(inspect(connection).get_table_names()) == {
                 "alembic_version",
@@ -191,7 +265,7 @@ def test_cli_targets_only_the_temporary_database_from_an_unrelated_directory(
         if password in result.stdout + result.stderr:
             pytest.fail("Migration CLI exposed a database secret", pytrace=False)
         if arguments == ["current"]:
-            assert "0011_transfer_requests (head)" in result.stdout
+            assert "0012_transfer_deletion (head)" in result.stdout
 
     environment["FINSIGHT_DB_PASSWORD"] = "synthetic-invalid-migration-password"
     result = subprocess.run(

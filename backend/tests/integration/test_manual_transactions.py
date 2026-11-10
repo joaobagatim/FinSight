@@ -42,7 +42,13 @@ from app.services.transactions import (
     TransactionStale,
     transaction_etag,
 )
-from app.services.transfers import TransferRejected, TransferService, TransferStale, transfer_etag
+from app.services.transfers import (
+    TransferRejected,
+    TransferRemoved,
+    TransferService,
+    TransferStale,
+    transfer_etag,
+)
 
 pytestmark = pytest.mark.postgres
 PASSWORD = "synthetic transaction password"
@@ -1517,6 +1523,205 @@ def test_transfer_posting_concurrency_rollback_revocation_and_archived_replay(
     sessions.revoke_by_access(token)
     with pytest.raises(AuthenticationDenied):
         service.post(token, second_id, transfer_etag(second))
+
+
+@pytest.fixture
+def transfer_deletion_resources(context, transfer_resources):
+    yield transfer_resources
+    database = context[0]
+    assert database.engine.url.database.startswith("finsight_test_")
+    # Only the synthetic fixture is restored, so its guarded downgrade can clean up.
+    with database.sessions.begin() as session:
+        session.execute(
+            update(Transfer)
+            .where(Transfer.user_id.in_([item["owner"] for item in transfer_resources]))
+            .values(deleted_at=None)
+        )
+
+
+def test_transfer_deletion_http_preserves_identity_and_removes_both_legs_from_all_balances(
+    context, transfer_deletion_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_deletion_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service, balances = TransferService(sessions), TransactionService(sessions)
+    key, original = uuid4(), TransferInput(**transfer_body(own))
+    transfer_id = service.create(token, key, original)
+    planned_id = service.create(
+        token, uuid4(), TransferInput(**transfer_body(own, status="planned", amount="200.00"))
+    )
+    projection = dict(
+        base_date=date(2026, 1, 3),
+        target_date=date(2026, 1, 5),
+        overdue_policy="include",
+        scope="selected",
+        account_ids=[own["account"]],
+    )
+    assert balances.projected_balance(token, **projection).projected_balance == Decimal("300.00")
+    stack, make = clients(context)
+    with stack:
+        client, other = make(emails[0]), make(emails[1])
+        path = f"/api/v1/transfers/{transfer_id}"
+        headers = {
+            "Origin": ORIGIN,
+            "X-CSRF-Token": client.cookies.get("__Host-finsight-csrf"),
+            "If-Match": client.get(path).headers["etag"],
+        }
+        assert (
+            client.request("DELETE", path, json={}, headers={"Origin": ORIGIN}).status_code == 403
+        )
+        assert (
+            client.request(
+                "DELETE",
+                path,
+                json={},
+                headers={k: v for k, v in headers.items() if k != "If-Match"},
+            ).status_code
+            == 422
+        )
+        assert (
+            client.request("DELETE", path, json={"status": "posted"}, headers=headers).status_code
+            == 422
+        )
+        assert (
+            client.request(
+                "DELETE", path, content="{}", headers=headers | {"Content-Type": "text/plain"}
+            ).status_code
+            == 415
+        )
+        assert (
+            client.request(
+                "DELETE",
+                path,
+                content='"' + "x" * 17000 + '"',
+                headers=headers | {"Content-Type": "application/json"},
+            ).status_code
+            == 413
+        )
+        foreign = headers | {"X-CSRF-Token": other.cookies.get("__Host-finsight-csrf")}
+        assert other.request("DELETE", path, json={}, headers=foreign).status_code == 404
+        assert (
+            client.request(
+                "DELETE", path, json={}, headers=headers | {"If-Match": '"' + "0" * 64 + '"'}
+            ).status_code
+            == 412
+        )
+        assert (
+            client.options(
+                path,
+                headers={
+                    "Origin": ORIGIN,
+                    "Access-Control-Request-Method": "DELETE",
+                    "Access-Control-Request-Headers": "if-match,x-csrf-token,content-type",
+                },
+            ).status_code
+            == 200
+        )
+        # Deletion remains available for retained history in an archived account.
+        with database.sessions.begin() as session:
+            session.get(Account, own["target"]).is_active = False
+        removed = client.request("DELETE", path, json={}, headers=headers)
+        assert removed.status_code == 204 and removed.content == b""
+        assert removed.headers["cache-control"] == "no-store"
+        assert client.request("DELETE", path, json={}, headers=headers).status_code == 204
+        assert client.get(path).status_code == 410 and other.get(path).status_code == 404
+        assert client.patch(path, json={"amount": "1.00"}, headers=headers).status_code == 410
+        assert client.post(path + "/post", json={}, headers=headers).status_code == 410
+        assert [item["id"] for item in client.get("/api/v1/transfers").json()["items"]] == [
+            str(planned_id)
+        ]
+        for account in (own["account"], own["target"]):
+            assert balances.balance(token, account, date(2026, 1, 5)).balance == Decimal("1000.00")
+            points = balances.balance_history(
+                token, account, date_from=date(2026, 1, 3), date_to=date(2026, 1, 5)
+            ).points
+            assert all(point.balance == Decimal("1000.00") for point in points)
+        assert balances.consolidated_balance(
+            token, as_of=date(2026, 1, 5), scope="all", account_ids=None
+        ).balance == Decimal("2000.00")
+        assert balances.projected_balance(token, **projection).projected_balance == Decimal(
+            "800.00"
+        )
+        service.delete(token, planned_id, transfer_etag(service.get(token, planned_id)))
+        assert balances.projected_balance(token, **projection).projected_balance == Decimal(
+            "1000.00"
+        )
+        with pytest.raises(TransferRemoved):
+            service.create(token, key, original)
+        assert (
+            client.post(
+                "/api/v1/transfers",
+                json=original.model_dump(mode="json"),
+                headers=headers | {"Idempotency-Key": str(key)},
+            ).status_code
+            == 410
+        )
+        with database.sessions() as session:
+            row = session.get(Transfer, transfer_id)
+            assert row.deleted_at is not None and row.amount == Decimal("500.00")
+            assert (
+                session.get(TransferCreationRequest, (own["owner"], key)).transfer_id == transfer_id
+            )
+
+
+def test_transfer_deletion_races_rollback_and_revocation_do_not_revive_money(
+    context, transfer_deletion_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_deletion_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransferService(sessions)
+    for status in ("planned", "posted"):
+        transfer_id = service.create(
+            token, uuid4(), TransferInput(**transfer_body(own, status=status))
+        )
+        snapshot = service.get(token, transfer_id)
+        etag = transfer_etag(snapshot)
+
+        def fail(_session):
+            raise SQLAlchemyError("synthetic transfer deletion failure")
+
+        event.listen(database.sessions.class_, "before_commit", fail)
+        try:
+            with pytest.raises(SessionUnavailable):
+                service.delete(token, transfer_id, etag)
+        finally:
+            event.remove(database.sessions.class_, "before_commit", fail)
+        assert service.get(token, transfer_id) == snapshot
+        barrier = Barrier(2)
+
+        def remove(barrier=barrier, transfer_id=transfer_id, etag=etag):
+            barrier.wait(timeout=10)
+            try:
+                service.delete(token, transfer_id, etag)
+                return "removed"
+            except TransferStale:
+                return "stale"
+
+        def change(barrier=barrier, transfer_id=transfer_id, etag=etag, status=status):
+            barrier.wait(timeout=10)
+            try:
+                if status == "planned":
+                    service.post(token, transfer_id, etag)
+                else:
+                    service.update(token, transfer_id, TransferUpdateInput(amount="200.00"), etag)
+                return "changed"
+            except TransferRemoved:
+                return "removed"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(remove), executor.submit(change)]
+            outcomes = [future.result(timeout=20) for future in futures]
+        assert outcomes in (["removed", "removed"], ["stale", "changed"])
+        if outcomes[0] == "stale":
+            service.delete(token, transfer_id, transfer_etag(service.get(token, transfer_id)))
+        service.delete(token, transfer_id, etag)
+        with pytest.raises(TransferRemoved):
+            service.get(token, transfer_id)
+    sessions.revoke_by_access(token)
+    with pytest.raises(AuthenticationDenied):
+        service.delete(token, transfer_id, etag)
 
 
 def test_transfer_edit_http_is_conditional_owned_and_updates_one_atomic_transfer(

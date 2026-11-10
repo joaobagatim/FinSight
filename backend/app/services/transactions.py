@@ -109,6 +109,7 @@ def account_balance_query(
         .where(
             Transfer.user_id == user_id,
             Transfer.status == status,
+            Transfer.deleted_at.is_(None),
             or_(Transfer.to_account_id == Account.id, Transfer.from_account_id == Account.id),
             Transfer.effective_date > Account.opening_date,
             Transfer.effective_date <= as_of,
@@ -505,6 +506,7 @@ class TransactionService:
                 ).where(
                     Transfer.user_id == owner.user_id,
                     Transfer.status == "posted",
+                    Transfer.deleted_at.is_(None),
                     or_(
                         Transfer.from_account_id == account_id, Transfer.to_account_id == account_id
                     ),

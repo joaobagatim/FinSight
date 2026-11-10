@@ -786,7 +786,8 @@ fieldset {
   margin-bottom: 0.5rem;
 }
 
-.transfer-edit-panel button {
+.transfer-edit-panel button,
+.transfer-deletion-panel button {
   max-width: 100%;
   min-height: 44px;
   height: auto;
