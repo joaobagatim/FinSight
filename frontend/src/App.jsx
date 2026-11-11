@@ -126,6 +126,11 @@ export default function App() {
 
   return (
     <div className="app-shell min-h-screen">
+      {import.meta.env.VITE_DEMO_MODE === 'true' && (
+        <p className="demo-banner" role="note">
+          Ambiente de demonstração — dados fictícios, separados do seu banco pessoal.
+        </p>
+      )}
       <a className="skip-link" href="#conteudo">
         Pular para o conteúdo
       </a>
