@@ -5,6 +5,7 @@ from app.models.account_creation_request import AccountCreationRequest
 from app.models.category import Category
 from app.models.financial_goal import FinancialGoal
 from app.models.goal_allocation import GoalAllocation
+from app.models.goal_creation_request import GoalCreationRequest
 from app.models.import_job import ImportJob
 from app.models.import_row import ImportRow
 from app.models.refresh_token_history import RefreshTokenHistory
@@ -21,6 +22,7 @@ __all__ = [
     "Category",
     "FinancialGoal",
     "GoalAllocation",
+    "GoalCreationRequest",
     "ImportJob",
     "ImportRow",
     "RefreshTokenHistory",

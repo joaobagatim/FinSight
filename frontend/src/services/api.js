@@ -120,6 +120,80 @@ async function authenticatedRead(path) {
 }
 
 export const api = {
+  createGoal: (ownerId, data, key) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send('/goals', {
+          method: 'POST',
+          data,
+          headers: { 'X-CSRF-Token': await bootstrap(), 'Idempotency-Key': key },
+        })
+        if (
+          typeof result?.id !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result.id)
+        )
+          throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
+  goal: (ownerId, id) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/goals/${encodeURIComponent(id)}`, { versioned: true })
+      if (
+        result.data?.id !== id ||
+        !['active', 'completed', 'cancelled'].includes(result.data.status)
+      )
+        throw new ApiError(0)
+      return result
+    }),
+  updateGoal: (ownerId, id, data, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send(`/goals/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          data,
+          versioned: true,
+          headers: { 'If-Match': etag, 'X-CSRF-Token': await bootstrap() },
+        })
+        if (
+          result.data?.id !== id ||
+          !['active', 'completed', 'cancelled'].includes(result.data.status)
+        )
+          throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
+  goals: (ownerId, offset = 0) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/goals?limit=50&offset=${offset}`)
+      if (!Array.isArray(result?.items)) throw new ApiError(0)
+      return result
+    }),
+
   correctAccountOpening: (ownerId, id, data, etag) =>
     coordinated(async () => {
       const profile = await renewUnlocked()
