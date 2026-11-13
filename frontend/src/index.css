@@ -806,3 +806,93 @@ fieldset {
   min-height: 2.75rem;
   max-width: 100%;
 }
+
+.imports-panel {
+  min-width: 0;
+}
+.imports-panel section {
+  margin-top: 24px;
+  min-width: 0;
+}
+.imports-panel h2,
+.imports-panel h3,
+.imports-panel h4,
+.imports-panel p,
+.imports-panel label,
+.imports-panel li,
+.imports-panel dd {
+  overflow-wrap: anywhere;
+}
+.imports-panel button {
+  white-space: normal;
+  height: auto;
+  min-height: 44px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.import-upload,
+.import-preview {
+  padding: clamp(16px, 3vw, 28px);
+  min-width: 0;
+}
+.import-upload form + section {
+  border-top: 1px solid var(--border);
+  padding-top: 24px;
+}
+.import-upload input[type='file'] {
+  padding: 10px 6px;
+  font-size: 13px;
+}
+.import-upload input[type='file']::file-selector-button {
+  max-width: 100%;
+  white-space: normal;
+}
+.import-sample-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 20px 0;
+}
+.import-sample-scroll table {
+  border-collapse: collapse;
+  min-width: 40rem;
+  width: 100%;
+  font-size: 13px;
+}
+.import-sample-scroll th,
+.import-sample-scroll td {
+  padding: 12px;
+  min-width: 8rem;
+  max-width: 16rem;
+  vertical-align: top;
+  text-align: left;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+}
+.import-sample-scroll caption {
+  text-align: left;
+  padding: 12px;
+  font-weight: 600;
+}
+.import-summary,
+.import-row dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+  gap: 16px;
+}
+.import-summary dd,
+.import-row dd {
+  margin: 6px 0 0;
+}
+.import-rows {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 16px;
+}
+.import-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}

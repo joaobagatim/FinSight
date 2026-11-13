@@ -4,14 +4,56 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 
 ## Desenvolvimento
 
+### Preparar uma prévia CSV pelo navegador
+
+Entre no FinSight e abra **Importações**. Selecione uma conta ativa, escolha um
+arquivo `.csv` UTF-8 de até 1 MiB/5.000 registros e clique em **Analisar arquivo**.
+A análise mostra uma amostra e não guarda um job. Se o cabeçalho for ambíguo,
+escolha explicitamente `;` ou `,` e analise novamente. Contas adicionais são
+carregadas por paginação; contas arquivadas não recebem novas prévias.
+
+Escolha as colunas de data, descrição e valor com sinal ou débito/crédito. Cada
+campo deve usar uma coluna diferente. Selecione explicitamente os formatos de
+data e de valor; a coluna de referência é opcional. Alterar conta, arquivo ou
+separador invalida a análise anterior. A amostra permite rolagem horizontal em
+telas estreitas e o conteúdo é mostrado como texto, sem interpretar HTML.
+
+**Guardar prévia para revisão** salva somente o job e os registros interpretados.
+A consulta apresenta conta, abertura, situação, total, inválidos e lançamentos
+criados, além de valores exatos e motivos por registro. Datas anteriores ou iguais
+à abertura são inválidas. Registros não identificados não são apresentados como
+zero. **Carregar mais registros da prévia** e o histórico usam a paginação real.
+Prévias de contas arquivadas continuam consultáveis. O aviso de arquivo igual
+não elimina compras idênticas nem substitui uma revisão de duplicidades.
+
+Criar uma prévia **não altera saldos nem cria lançamentos**. Não há botão de
+confirmação financeira nesta entrega; correção, categorização, seleção e
+confirmação serão acrescentadas ao fluxo de revisão. Transferências e estornos
+precisam ser conferidos: o sinal do valor sozinho não comprova sua natureza.
+Uma prévia cria um vínculo com a conta, considerado pela proteção existente da
+referência de abertura. Se precisar redefini-la, faça isso antes de guardar o job.
+
+O cliente bloqueia duplo envio e preserva a mesma chave/corpo em memória durante
+a navegação interna quando o resultado não pode ser confirmado. **Conferir e
+repetir envio da prévia** repete a intenção original, inclusive se a conta tiver
+sido arquivada após uma criação bem-sucedida. Sair da tela não cancela uma criação
+já concluída. Confira o histórico antes de encerrar uma tentativa ou criar outra.
+Recarregar a página perde esse estado; logout, expiração e troca de usuário o
+limpam. Arquivos e intenções não vão para localStorage/sessionStorage ou logs.
+
+O frontend confere o perfil ativo antes de cada chamada protegida e usa a sessão
+e CSRF existentes. O backend continua responsável pela autorização e validação.
+Sem alteração de schema/dependência nesta interface; a API requer a revisão 0015.
+O ambiente e o banco pessoais não são atualizados automaticamente.
+
 ### API de upload e prévia CSV
 
 A API permite inspecionar e guardar uma prévia em uma conta própria ativa em BRL.
 O CSV original é processado em memória e não é salvo em disco ou no banco. Somente
 metadados e linhas normalizadas da prévia são persistidos. Esses dados continuam
 sensíveis e são consultados somente pelo proprietário autenticado.
-Este incremento não adiciona tela de importação nem confirmação financeira:
-nenhuma transação, transferência ou reserva é criada por essas rotas.
+A interface acima consome essas rotas. Não há confirmação financeira nesta
+etapa: nenhuma transação, transferência ou reserva é criada por essas rotas.
 
 Rotas autenticadas, com respostas `no-store`:
 
