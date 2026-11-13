@@ -139,6 +139,7 @@ def test_upgrade_downgrade_preserves_account_and_clears_only_request_memory(conn
         "transfer_creation_requests",
         "goal_creation_requests",
         "allocation_creation_requests",
+        "import_creation_requests",
     }
     assert (
         connection.execute(select(Account.__table__).where(Account.id == account)).one() == before
