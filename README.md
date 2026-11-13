@@ -329,7 +329,8 @@ financeiro é criado pelas migrations.
 `0011_transfer_requests` acrescenta a tabela técnica `transfer_creation_requests`
 e a chave composta proprietário/id em `transfers`, preservando transferências
 existentes. `0012_transfer_deletion` acrescenta o marcador nullable de exclusão
-lógica em transferências. O schema atual tem quinze tabelas físicas, incluindo `alembic_version`.
+lógica em transferências. `0013_goal_creation_requests` acrescenta a memória técnica de criação de metas.
+O schema atual tem dezesseis tabelas físicas, incluindo `alembic_version`.
 O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
 domínio estão modeladas; autenticação HTTP e cadastro/consulta de contas próprias
 estão disponíveis. Os demais recursos financeiros ainda serão implementados.
@@ -359,11 +360,11 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0012_transfer_deletion` e as quinze tabelas `alembic_version`, `users`,
+`0013_goal_creation_requests` e as dezesseis tabelas `alembic_version`, `users`,
 `user_sessions`, `accounts`, `categories`, `import_jobs`, `import_rows`,
 `transactions`, `transfers`, `financial_goals`, `goal_allocations` e
 `refresh_token_history`, `account_creation_requests`, `transaction_creation_requests`
-e `transfer_creation_requests`.
+e `transfer_creation_requests`, além de `goal_creation_requests`.
 Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
 são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
@@ -1085,7 +1086,7 @@ SELECT count(*) AS persisted_creation_requests
 FROM public.account_creation_requests;
 ```
 
-Resultado esperado em um banco recém-migrado: revisão `0012_transfer_deletion`,
+Resultado esperado em um banco recém-migrado: revisão `0013_goal_creation_requests`,
 cinco colunas não nulas, chave primária composta, duas chaves estrangeiras,
 verificações de digest/UUIDv4 e zero registros. Nenhuma conta, usuário ou chave é
 criada automaticamente. A API continua sem executar migrations no startup.
@@ -1800,6 +1801,76 @@ O saldo mostrado anteriormente é retirado ao tentar efetivar e ao reconhecer
 um estado efetivado; consulte-o novamente para obter a posição atual. Enquanto
 houver uma criação financeira pendente, os botões de efetivação ficam desativados.
 Uma falha de commit mantém o lançamento planejado e o saldo inalterados.
+
+## Gerenciar metas pessoais
+
+Em **Metas**, cadastre nome, valor alvo positivo em reais e, opcionalmente, prazo
+e descrição. A meta começa ativa. Consulte a lista paginada ou escolha **Editar meta**
+para revisar nome, valor, prazo, descrição e situação. Campos de data/descrição
+podem ser limpos. A descrição é texto simples de uma linha, sem caracteres de controle.
+
+Concluir, cancelar ou reativar é uma decisão explícita sobre o objetivo. A situação
+não comprova que o valor tenha sido acumulado. Nenhuma dessas ações reserva,
+retira, libera ou movimenta dinheiro; os saldos das contas permanecem iguais.
+Esta entrega inicial da Fase 3 gerencia os objetivos. Reservas, retiradas,
+progresso e saldo livre ainda não estão disponíveis. A política para gastos que
+consomem valores reservados será definida antes de ativar essa parte do módulo.
+Cancelar preserva o registro; não há exclusão física de metas por esta API.
+
+### Contrato de metas e repetição segura
+
+- `POST /api/v1/goals`: JSON com `name` (1–150 caracteres), `target_amount` (string
+  decimal positiva, até 13 inteiros e duas casas), `description` opcional/null
+  (até 2.000 caracteres) e `target_date` ISO opcional/null. Exige sessão própria,
+  Origin permitido, CSRF e `Idempotency-Key` UUIDv4. Retorna201 com ID e Location.
+- `GET /api/v1/goals`: lista somente metas próprias, `limit`1–100, `offset` e filtro
+  opcional `status=active|completed|cancelled`; retorno com `has_more`.
+- `GET /api/v1/goals/{id}`: consulta própria e ETag; alheia/ausente404.
+- `PATCH /api/v1/goals/{id}`: mudanças parciais explícitas nos mesmos campos e
+  situação. Exige CSRF/Origin e `If-Match` da consulta. Versão antiga412; não aceita
+  `user_id` ou campos desconhecidos. Somente descrição/prazo aceitam null.
+
+A chave de criação é persistida por proprietário e hash do conteúdo normalizado.
+Mesma chave e corpo retornam o mesmo ID; corpo diferente retorna409. Repetir o
+cadastro original após editar/concluir/cancelar não restaura os dados antigos.
+Locks transacionais serializam criação e edição com revogação de sessão.
+
+Duplo clique não envia duas criações. Se a resposta do cadastro for incerta, a
+tela preserva a mesma chave e corpo em memória para **Conferir e repetir cadastro
+da meta**. Navegar entre áreas conserva a tentativa durante a sessão; recarregar
+a página a perde. Confira a lista antes de encerrar uma tentativa ou iniciar outra.
+Em conflito/erro de edição, consulte **Recarregar situação da meta** e revise os
+dados atuais antes de confirmar novamente; GET não envia outra alteração.
+
+### Migração 0013 e verificação pelo DBeaver
+
+`0013_goal_creation_requests`, filha de `0012_transfer_deletion`, acrescenta somente
+a tabela técnica `goal_creation_requests`, com chave por dono/UUID e FK composta
+para a meta própria. Preserva metas existentes e não cria alocações. O schema tem
+16 tabelas físicas incluindo `alembic_version`. O destino precisa dessa revisão
+antes de usar a versão atual; startup não migra automaticamente e a implementação
+não aplica migrations ao banco pessoal. Não há dependência nova.
+
+Depois de revisar o destino e migrá-lo, confira somente a estrutura no DBeaver:
+
+```sql
+SELECT current_database();
+SELECT version_num FROM public.alembic_version;
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'goal_creation_requests'
+ORDER BY ordinal_position;
+SELECT conname, contype FROM pg_constraint
+WHERE conrelid = 'public.goal_creation_requests'::regclass
+ORDER BY conname;
+```
+
+Espere revisão `0013_goal_creation_requests` ou posterior, cinco colunas não nulas
+(`user_id`, `idempotency_key`, `request_hash`, `goal_id`, `created_at`), PK composta,
+FKs de usuário/meta própria e checks de chave/hash. Consultas somente de leitura,
+sem exibir objetivos ou movimentações. Downgrade recusa descartar chaves retidas;
+não apague registros para forçar rollback ou perder a proteção de repetição.
+
 
 ## Categorias próprias pela API
 
