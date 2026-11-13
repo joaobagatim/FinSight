@@ -4,6 +4,51 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 
 ## Desenvolvimento
 
+### Importação CSV — núcleo inicial
+
+O módulo interno `app.imports.csv_parser` prepara a importação assistida da
+Fase 4. Este primeiro incremento não adiciona upload HTTP, tela de importação,
+jobs persistidos ou confirmação financeira. Nenhum arquivo é salvo e nenhuma
+transação é criada pelo parser. A revisão pelo usuário e a confirmação explícita
+serão implementadas nos próximos incrementos.
+
+O núcleo aceita bytes UTF-8, com ou sem BOM, separador `;` ou `,` e campos entre
+aspas. Limites: 1 MiB, 5.000 registros de dados, 32 colunas e 4.096 caracteres
+por célula. Cabeçalhos vazios/duplicados são recusados. O separador só é inferido
+quando uma única alternativa corresponde ao cabeçalho; ambiguidade exige escolha
+explícita. Células podem ter quebras de linha entre aspas, mas descrições de
+lançamentos devem ser texto de uma linha, com até 255 caracteres.
+
+`CsvLayout` mapeia índices distintos de data, descrição e valor com sinal, ou
+débito/crédito separados. Os formatos de data (`iso` ou `day-first`) e monetário
+(`decimal-dot` ou `decimal-comma`) são explícitos. Assim, `1.234` representa
+R$ 1.234,00 somente no formato com vírgula decimal; no formato de ponto decimal
+é recusado por possuir três casas. Não há arredondamento silencioso, conversão
+por float ou adivinhação do formato. Débito/crédito exigem somente um lado
+positivo. Valores zero, não finitos ou acima de NUMERIC(15,2) são inválidos.
+
+`normalize_rows` gera uma prévia técnica com `Decimal`, data, tipo, identificador
+externo opcional e códigos de erro por registro. Datas anteriores ou iguais à
+abertura são inválidas. O chamador deverá obter essa abertura de uma conta
+autorizada no backend; o parser não autentica nem concede acesso a contas.
+Linhas com campos faltantes/extras permanecem na prévia como inválidas. Duas
+compras idênticas são preservadas: detecção de possíveis duplicatas e decisão do
+usuário serão responsabilidade do serviço de revisão, ainda não implementado.
+
+Erros estruturais usam códigos fixos sem repetir o conteúdo recebido; objetos de
+prévia não incluem dados no `repr`. Não registre conteúdo de extratos em logs.
+O checksum SHA-256 é metadado técnico, não uma autorização de importação.
+
+Para validar somente esta unidade, na raiz:
+
+```powershell
+backend/.venv/Scripts/python.exe -m pytest -c backend/pyproject.toml backend/tests/unit/test_csv_parser.py -s
+```
+
+O caso de 5.000 linhas mede somente leitura/normalização em memória; não mede
+upload, banco ou interface e não comprova o tempo total de uma importação.
+Não há nova dependência ou migração nesta unidade; schema permanece 0014.
+
 ### Reservas e progresso das metas
 
 Na área **Metas**, use **Reservas e progresso** para reservar dinheiro de uma
