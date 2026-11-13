@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import PlainTextResponse
 
 from app.api.accounts import router as accounts_router
+from app.api.allocations import router as allocations_router
 from app.api.auth import router as auth_router
 from app.api.categories import router as categories_router
 from app.api.error_handlers import registration_validation_error
@@ -37,6 +38,7 @@ from app.services.accounts import (
     AccountOpeningLocked,
     AccountStale,
 )
+from app.services.allocations import AllocationRejected
 from app.services.categories import CategoryConflict, CategoryNotFound, CategoryStale
 from app.services.goals import GoalConflict, GoalNotFound, GoalStale
 from app.services.registration import RegistrationUnavailable
@@ -127,6 +129,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.exception_handler(GoalNotFound)
     async def goal_not_found(_request, _error):
         return JSONResponse({"detail": "Goal not found"}, status_code=404)
+
+    @application.exception_handler(AllocationRejected)
+    async def allocation_rejected(_request, _error):
+        return JSONResponse(
+            {"detail": "Reservation rejected; check date, state and available amounts"},
+            status_code=422,
+        )
 
     @application.exception_handler(GoalConflict)
     async def goal_conflict(_request, _error):
@@ -240,6 +249,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(accounts_router)
     application.include_router(categories_router)
     application.include_router(goals_router)
+    application.include_router(allocations_router)
     application.include_router(transactions_router)
     application.include_router(transfers_router)
     application.include_router(balance_router)

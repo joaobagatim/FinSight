@@ -799,3 +799,10 @@ fieldset {
 .transfer-edit-panel .field {
   min-width: 0;
 }
+
+.reservation-alerts button {
+  white-space: normal;
+  height: auto;
+  min-height: 2.75rem;
+  max-width: 100%;
+}
