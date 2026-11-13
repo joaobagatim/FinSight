@@ -14,6 +14,7 @@ from app.api.categories import router as categories_router
 from app.api.error_handlers import registration_validation_error
 from app.api.goals import router as goals_router
 from app.api.health import router as health_router
+from app.api.imports import router as imports_router
 from app.api.session_auth import router as session_router
 from app.api.transactions import balance_router
 from app.api.transactions import router as transactions_router
@@ -32,6 +33,7 @@ from app.core.session_http import (
 )
 from app.core.tokens import TokenConfigurationError
 from app.db.session import Database
+from app.imports.csv_parser import CsvRejected
 from app.services.accounts import (
     AccountConflict,
     AccountNotFound,
@@ -41,6 +43,7 @@ from app.services.accounts import (
 from app.services.allocations import AllocationRejected
 from app.services.categories import CategoryConflict, CategoryNotFound, CategoryStale
 from app.services.goals import GoalConflict, GoalNotFound, GoalStale
+from app.services.imports import ImportBusy, ImportConflict, ImportNotFound, ImportRejected
 from app.services.registration import RegistrationUnavailable
 from app.services.sessions import (
     AuthenticationDenied,
@@ -135,6 +138,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             {"detail": "Reservation rejected; check date, state and available amounts"},
             status_code=422,
+        )
+
+    @application.exception_handler(ImportNotFound)
+    async def import_not_found(_request, _error):
+        return JSONResponse({"detail": "Import resource not found"}, status_code=404)
+
+    @application.exception_handler(ImportRejected)
+    async def import_rejected(_request, _error):
+        return JSONResponse(
+            {"detail": "Import rejected; check CSV source and account state"}, status_code=422
+        )
+
+    @application.exception_handler(CsvRejected)
+    async def csv_rejected(_request, error):
+        return JSONResponse({"detail": "CSV rejected", "code": str(error)}, status_code=422)
+
+    @application.exception_handler(ImportConflict)
+    async def import_conflict(_request, _error):
+        return JSONResponse({"detail": "Idempotency key conflict"}, status_code=409)
+
+    @application.exception_handler(ImportBusy)
+    async def import_busy(_request, _error):
+        return JSONResponse(
+            {"detail": "CSV processing busy; retry later"},
+            status_code=503,
+            headers={"Retry-After": "1"},
         )
 
     @application.exception_handler(GoalConflict)
@@ -249,6 +278,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(accounts_router)
     application.include_router(categories_router)
     application.include_router(goals_router)
+    application.include_router(imports_router)
     application.include_router(allocations_router)
     application.include_router(transactions_router)
     application.include_router(transfers_router)
