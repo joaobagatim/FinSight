@@ -2,6 +2,7 @@
 
 from app.models.account import Account
 from app.models.account_creation_request import AccountCreationRequest
+from app.models.allocation_creation_request import AllocationCreationRequest
 from app.models.category import Category
 from app.models.financial_goal import FinancialGoal
 from app.models.goal_allocation import GoalAllocation
@@ -19,6 +20,7 @@ from app.models.user_session import UserSession
 __all__ = [
     "Account",
     "AccountCreationRequest",
+    "AllocationCreationRequest",
     "Category",
     "FinancialGoal",
     "GoalAllocation",

@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Numeric,
     String,
+    UniqueConstraint,
     Uuid,
     and_,
     func,
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
 class GoalAllocation(Base):
     __tablename__ = "goal_allocations"
     __table_args__ = (
+        UniqueConstraint("user_id", "id", name="uq_goal_allocations_user_id_id"),
         ForeignKeyConstraint(
             ["user_id", "goal_id"],
             ["financial_goals.user_id", "financial_goals.id"],
