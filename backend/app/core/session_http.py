@@ -37,9 +37,17 @@ def is_transfer_path(path: str) -> bool:
     return path == "/api/v1/transfers" or path.startswith("/api/v1/transfers/")
 
 
+IMPORT_BODY_BYTES = 1_500_000
+
+
+def is_import_path(path: str) -> bool:
+    return path == "/api/v1/imports" or path.startswith("/api/v1/imports/")
+
+
 def is_financial_path(path: str) -> bool:
     return (
-        is_account_path(path)
+        is_import_path(path)
+        or is_account_path(path)
         or is_category_path(path)
         or is_transaction_path(path)
         or is_transfer_path(path)
@@ -160,6 +168,12 @@ class SessionHttpMiddleware:
             or is_financial_path(scope["path"])
             else self.settings.auth_body_bytes
         )
+        import_upload = (
+            scope["path"] in {"/api/v1/imports", "/api/v1/imports/inspect"}
+            and scope["method"] == "POST"
+        )
+        if import_upload:
+            bound = IMPORT_BODY_BYTES
         body = bytearray()
         while True:
             message = await receive()
@@ -167,7 +181,10 @@ class SessionHttpMiddleware:
                 return
             chunk = message.get("body", b"")
             if len(body) + len(chunk) > bound:
-                await reject(413, "Authentication body too large")
+                await reject(
+                    413,
+                    "Import body too large" if import_upload else "Authentication body too large",
+                )
                 return
             body.extend(chunk)
             if not message.get("more_body", False):

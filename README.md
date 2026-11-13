@@ -4,6 +4,57 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 
 ## Desenvolvimento
 
+### API de upload e prévia CSV
+
+A API permite inspecionar e guardar uma prévia em uma conta própria ativa em BRL.
+O CSV original é processado em memória e não é salvo em disco ou no banco. Somente
+metadados e linhas normalizadas da prévia são persistidos. Esses dados continuam
+sensíveis e são consultados somente pelo proprietário autenticado.
+Este incremento não adiciona tela de importação nem confirmação financeira:
+nenhuma transação, transferência ou reserva é criada por essas rotas.
+
+Rotas autenticadas, com respostas `no-store`:
+
+- `POST /api/v1/imports/inspect`: inspeciona colunas, separador, total de registros,
+  até cinco registros de amostra e arquivos iguais já enviados àquela conta.
+  Não cria job. Exige Origin/CSRF.
+- `POST /api/v1/imports`: normaliza e guarda um job em `review`, com linhas
+  `pending` ou `invalid`. Exige Origin/CSRF e `Idempotency-Key` UUIDv4.
+- `GET /api/v1/imports`: histórico próprio paginado (`limit/offset`).
+- `GET /api/v1/imports/{id}`: metadados, contadores, inválidas e quantidade de
+  outros jobs da mesma conta com o mesmo checksum.
+- `GET /api/v1/imports/{id}/rows`: registros da prévia paginados, valores exatos em
+  strings e códigos de erro. Acesso a job ausente ou alheio retorna 404.
+
+O transporte é JSON com `account_id`, `filename` (somente nome-base `.csv`),
+`content_base64` (bytes do CSV codificados em base64) e `delimiter` opcional
+(`;` ou `,`). A criação também exige `mapping` com os índices de colunas e
+formatos descritos abaixo. É necessário escolher o separador explicitamente
+quando o cabeçalho for ambíguo. O limite do CSV decodificado é 1 MiB; o corpo
+JSON é limitado a 1.500.000 bytes reais recebidos, incluindo a expansão base64.
+Somente essas duas rotas de envio têm o limite maior; as demais operações
+financeiras conservam seu limite anterior. Multipart não é aceito nesta API.
+
+Inspeção e criação compartilham um limite de duas operações em processamento por
+processo, sem fila; saturação retorna 503 com `Retry-After`. Origem/CSRF, sessão,
+paginação, tipo de arquivo e limites são verificados pelo servidor. Não coloque
+conteúdo de extratos, amostras ou respostas em logs, screenshots ou evidências.
+
+A conta e sua abertura são obtidas no servidor. Linhas anteriores ou iguais à
+abertura permanecem inválidas. Job, linhas e chave de repetição são confirmados
+juntos, sob o mesmo lock de usuário das operações financeiras. Falha desfaz todos.
+A mesma chave e conteúdo normalizado da intenção retornam o mesmo job, inclusive
+após arquivar a conta; outra entrada com a mesma chave retorna 409. Uma chave nova
+cria outra prévia e o checksum apenas avisa sobre arquivos iguais: não elimina
+compras idênticas nem autoriza gravação de transações. Duplicidade por período ou
+fingerprint, edição/categorização/seleção e confirmação continuam futuras.
+
+Requer a revisão Alembic `0015_import_creation_requests`: tabela técnica de
+repetição e índice de checksum por usuário/conta, total de 18 tabelas incluindo
+`alembic_version`. O downgrade recusa descartar chaves retidas e preserva os jobs
+e registros existentes. Migrações não são aplicadas no startup nem ao banco
+pessoal automaticamente. Não há nova dependência nesta entrega.
+
 ### Importação CSV — núcleo inicial
 
 O módulo interno `app.imports.csv_parser` prepara a importação assistida da
@@ -47,7 +98,8 @@ backend/.venv/Scripts/python.exe -m pytest -c backend/pyproject.toml backend/tes
 
 O caso de 5.000 linhas mede somente leitura/normalização em memória; não mede
 upload, banco ou interface e não comprova o tempo total de uma importação.
-Não há nova dependência ou migração nesta unidade; schema permanece 0014.
+O núcleo do parser não exige nova dependência ou migração; a API de prévia
+documentada acima requer a revisão 0015.
 
 ### Reservas e progresso das metas
 

@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from app.core.session_http import (
     is_account_path,
     is_category_path,
+    is_import_path,
     is_session_path,
     is_transaction_path,
 )
@@ -22,7 +23,9 @@ async def registration_validation_error(request: Request, error: RequestValidati
         return JSONResponse(
             status_code=422,
             content={
-                "detail": "Invalid account data"
+                "detail": "Invalid import data"
+                if is_import_path(request.url.path)
+                else "Invalid account data"
                 if is_account_path(request.url.path)
                 else "Invalid category data"
                 if is_category_path(request.url.path)

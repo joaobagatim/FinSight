@@ -66,6 +66,7 @@ class ImportJob(Base):
             name="ck_import_jobs_completion_date",
         ),
         Index("ix_import_jobs_user_created", "user_id", "created_at"),
+        Index("ix_import_jobs_owner_account_checksum", "user_id", "account_id", "file_checksum"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
