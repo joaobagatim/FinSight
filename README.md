@@ -4,6 +4,66 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 
 ## Desenvolvimento
 
+### Reservas e progresso das metas
+
+Na área **Metas**, use **Reservas e progresso** para reservar dinheiro de uma
+conta ou retirar uma reserva. Reserva é um compromisso lógico: não cria despesa,
+receita ou transferência e não altera o saldo bancário. O saldo livre corresponde
+ao saldo bancário menos o total reservado naquela conta. O progresso considera
+todas as contas da meta; pode superar 100%, com excedente e faltante exibidos
+separadamente. Alterar a situação da meta não libera reservas automaticamente.
+
+Novas reservas exigem meta e conta próprias ativas, em BRL, com saldo livre
+suficiente. Retiradas são limitadas ao valor reservado naquela meta e conta e
+continuam disponíveis para contas arquivadas e metas concluídas/canceladas.
+Cada operação é registrada no dia atual de `America/Sao_Paulo`; não há lançamentos
+de reserva retroativos/futuros ou edição/exclusão do livro. Uma retirada registra
+um novo movimento negativo e preserva os anteriores.
+
+Despesas e transferências continuam permitidas quando comprometerem reservas.
+O aviso mostra a parcela reservada sem cobertura e o saldo livre, inclusive
+negativo. Ele é calculado novamente ao navegar, ao alterar lançamentos ou
+transferências e ao consultar/recarregar reservas. Não há notificações em segundo
+plano; mudanças de outra aba exigem nova consulta. Nenhum compromisso é apagado
+para ocultar insuficiência. O aviso lista até 50 contas e informa quando há mais.
+
+Contratos autenticados, sempre limitados ao proprietário da sessão:
+
+- `GET /api/v1/goals/{id}/funding`: reservado, progresso, faltante e excedente.
+- `GET /api/v1/goals/{id}/allocation-context?account_id={uuid}`: posição combinada
+  de meta/conta, saldo livre e reserva do par, com `ETag`.
+- `POST /api/v1/goals/{id}/allocations`: `account_id`, `kind` (`reserve` ou
+  `withdraw`), `amount` decimal positivo em string, `allocation_date` e `notes`
+  opcional. Exige Origin/CSRF, chave UUIDv4 `Idempotency-Key` e `If-Match` do contexto.
+- `GET /api/v1/goals/{id}/allocations`: livro assinado, paginado por `limit/offset`.
+- `GET /api/v1/accounts/{id}/availability`: saldo bancário, reservado, livre e
+  reserva sem cobertura na data atual.
+- `GET /api/v1/reservations/alerts`: contas próprias com reservas comprometidas.
+
+Valores e percentuais usam strings exatas, com duas casas. Dinheiro é calculado
+com Decimal/NUMERIC no backend e strings/BigInt no cliente. Concorrência é
+serializada por usuário junto das demais operações financeiras. Contexto alterado
+retorna 412 e exige nova consulta. Uma repetição da mesma chave/corpo retorna o
+mesmo movimento, mesmo após mudança de dia ou arquivamento; corpo diferente
+retorna 409. A intenção fica somente na memória do navegador e sobrevive à
+navegação interna; após recarregar a página, confira o histórico antes de criar
+outra operação. Falha de consulta não é apresentada como saldo zero.
+
+Essa entrega requer a revisão Alembic `0014_allocation_requests`: acrescenta uma
+tabela técnica de repetição e uma chave composta, sem modificar valores existentes
+no livro. O schema tem 17 tabelas, incluindo `alembic_version`. O downgrade recusa
+descartar chaves retidas. A aplicação não executa migrações no startup; selecione
+e confira o banco de destino antes de aplicar `alembic upgrade head`. O DBeaver
+continua acessando o PostgreSQL do Docker por localhost/porta configurada.
+Não é necessário instalar o servidor PostgreSQL no Windows.
+
+Validação direcionada: `backend/tests/unit/test_allocation_contract.py`,
+`backend/tests/integration/test_allocations_api.py` (PostgreSQL descartável) e
+`tests/auth-browser/reservations.spec.ts` (Playwright/TypeScript). Localmente são
+selecionados casos novos/afetados; a regressão completa permanece no CI.
+
+### Histórico da infraestrutura inicial
+
 A infraestrutura da Fase 0 está implementada. A Fase 1 adiciona modelos e migrações
 de usuários, sessões, contas, categorias, prévias de importação,
 transações, transferências, metas e alocações, além do cadastro de usuários.

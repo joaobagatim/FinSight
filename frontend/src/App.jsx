@@ -7,6 +7,7 @@ import TransactionsPanel from './components/TransactionsPanel.jsx'
 import TransfersPanel from './components/TransfersPanel.jsx'
 import BalancesPanel from './components/BalancesPanel.jsx'
 import GoalsPanel from './components/GoalsPanel.jsx'
+import ReservationAlerts from './components/ReservationAlerts.jsx'
 import { api, errorMessage, watchSessionChanges } from '@/services/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -37,6 +38,9 @@ export default function App() {
   const [transactionIntent, setTransactionIntent] = useState(null)
   const [transferIntent, setTransferIntent] = useState(null)
   const [goalIntent, setGoalIntent] = useState(null)
+  const [allocationIntent, setAllocationIntent] = useState(null)
+  const [financialRevision, setFinancialRevision] = useState(0)
+  const financialChanged = useCallback(() => setFinancialRevision((value) => value + 1), [])
   const main = useRef(null)
   const authVersion = useRef(0)
 
@@ -52,6 +56,7 @@ export default function App() {
         setTransactionIntent(null)
         setTransferIntent(null)
         setGoalIntent(null)
+        setAllocationIntent(null)
         setBusy(false)
         setView('home')
         setNotice('Seu acesso mudou em outra aba. Acesse novamente para continuar.')
@@ -65,6 +70,7 @@ export default function App() {
     setTransactionIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
     setTransferIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
     setGoalIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
+    setAllocationIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
     setView('accounts')
     setNotice('')
   }, [])
@@ -75,6 +81,7 @@ export default function App() {
     setTransactionIntent(null)
     setTransferIntent(null)
     setGoalIntent(null)
+    setAllocationIntent(null)
     setView('access')
     setNotice('Sua sessão terminou. Entre novamente para continuar.')
   }, [])
@@ -97,6 +104,7 @@ export default function App() {
         setTransactionIntent(null)
         setTransferIntent(null)
         setGoalIntent(null)
+        setAllocationIntent(null)
         setView('access')
       } else {
         setNotice(errorMessage(error, 'Não foi possível acessar sua conta. Tente novamente.'))
@@ -116,6 +124,7 @@ export default function App() {
       setTransactionIntent(null)
       setTransferIntent(null)
       setGoalIntent(null)
+      setAllocationIntent(null)
       setView('home')
       requestAnimationFrame(() => main.current?.focus())
     } catch (error) {
@@ -234,6 +243,12 @@ export default function App() {
                   Metas
                 </Button>
               </nav>
+              <ReservationAlerts
+                key={user.id}
+                ownerId={user.id}
+                revision={`${view}:${financialRevision}`}
+                onExpired={expired}
+              />
               {view === 'accounts' ? (
                 <AccountsPanel key={user.id} ownerId={user.id} onExpired={expired} />
               ) : view === 'categories' ? (
@@ -245,6 +260,9 @@ export default function App() {
                   onExpired={expired}
                   intent={goalIntent?.ownerId === user.id ? goalIntent : null}
                   onIntent={setGoalIntent}
+                  allocationIntent={allocationIntent?.ownerId === user.id ? allocationIntent : null}
+                  onAllocationIntent={setAllocationIntent}
+                  onFinancialChange={financialChanged}
                 />
               ) : view === 'balances' ? (
                 <BalancesPanel key={user.id} ownerId={user.id} onExpired={expired} />
@@ -255,6 +273,7 @@ export default function App() {
                   onExpired={expired}
                   intent={transferIntent?.ownerId === user.id ? transferIntent : null}
                   onIntent={setTransferIntent}
+                  onFinancialChange={financialChanged}
                 />
               ) : (
                 <TransactionsPanel
@@ -263,6 +282,7 @@ export default function App() {
                   onExpired={expired}
                   intent={transactionIntent?.ownerId === user.id ? transactionIntent : null}
                   onIntent={setTransactionIntent}
+                  onFinancialChange={financialChanged}
                 />
               )}
             </section>

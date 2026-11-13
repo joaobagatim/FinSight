@@ -568,6 +568,76 @@ export const api = {
         return submit() // Keep the same key and payload after an authenticated retry.
       }
     }),
+  goalFunding: (ownerId, goalId) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      return send(`/goals/${encodeURIComponent(goalId)}/funding`)
+    }),
+  allocationContext: (ownerId, goalId, accountId) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(
+        `/goals/${encodeURIComponent(goalId)}/allocation-context?account_id=${encodeURIComponent(accountId)}`,
+        { versioned: true },
+      )
+      if (
+        result.data?.funding?.goal?.id !== goalId ||
+        result.data?.availability?.account?.id !== accountId
+      )
+        throw new ApiError(0)
+      return result
+    }),
+  allocations: (ownerId, goalId, offset = 0) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(
+        `/goals/${encodeURIComponent(goalId)}/allocations?limit=50&offset=${offset}`,
+      )
+      if (!Array.isArray(result?.items)) throw new ApiError(0)
+      return result
+    }),
+  reservationAlerts: (ownerId) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send('/reservations/alerts')
+      if (
+        !Array.isArray(result?.items) ||
+        !Number.isSafeInteger(result?.account_count) ||
+        result.account_count < 0
+      )
+        throw new ApiError(0)
+      return result
+    }),
+  createAllocation: (ownerId, goalId, data, key, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send(`/goals/${encodeURIComponent(goalId)}/allocations`, {
+          method: 'POST',
+          data,
+          headers: { 'X-CSRF-Token': await bootstrap(), 'Idempotency-Key': key, 'If-Match': etag },
+        })
+        if (
+          typeof result?.id !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result.id)
+        )
+          throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        const renewed = await renewUnlocked()
+        if (renewed.id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
   profile: () => authenticatedRead('/users/me'),
   register: (data) => send('/auth/register', { method: 'POST', data, credentials: 'omit' }),
   login: (email, password) =>

@@ -1,12 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import GoalFields from '@/components/GoalFields'
+import AllocationPanel from '@/components/AllocationPanel'
 import { goalStatuses } from '@/lib/goals'
 import EditGoalPanel from '@/components/EditGoalPanel'
 import { api, errorMessage } from '@/services/api'
 import { formatDate, formatMoney } from '@/lib/money'
 
-export default function GoalsPanel({ ownerId, onExpired, intent, onIntent }) {
+export default function GoalsPanel({
+  ownerId,
+  onExpired,
+  intent,
+  onIntent,
+  allocationIntent,
+  onAllocationIntent,
+  onFinancialChange,
+}) {
   const [page, setPage] = useState({ items: [], has_more: false })
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -14,6 +23,7 @@ export default function GoalsPanel({ ownerId, onExpired, intent, onIntent }) {
   const [notice, setNotice] = useState('')
   const [refresh, setRefresh] = useState(0)
   const [editing, setEditing] = useState(null)
+  const [allocating, setAllocating] = useState(allocationIntent?.goalId ?? null)
   const [formKey, setFormKey] = useState(0)
   const [conflict, setConflict] = useState(intent?.conflict ?? false)
   const live = useRef(false),
@@ -71,7 +81,7 @@ export default function GoalsPanel({ ownerId, onExpired, intent, onIntent }) {
     }
   }
   async function persist(pending) {
-    if (sending.current || editing) return
+    if (sending.current || editing || allocating || allocationIntent) return
     sending.current = true
     setBusy(true)
     setError('')
@@ -155,13 +165,35 @@ export default function GoalsPanel({ ownerId, onExpired, intent, onIntent }) {
               <Button
                 type="button"
                 variant="outline"
-                disabled={loading || busy || Boolean(intent) || Boolean(editing)}
+                disabled={
+                  loading ||
+                  busy ||
+                  Boolean(intent) ||
+                  Boolean(editing) ||
+                  Boolean(allocating) ||
+                  Boolean(allocationIntent)
+                }
                 onClick={() => {
                   setNotice('')
                   setEditing(item.id)
                 }}
               >
                 Editar meta
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={
+                  loading ||
+                  busy ||
+                  Boolean(intent) ||
+                  Boolean(editing) ||
+                  Boolean(allocating) ||
+                  Boolean(allocationIntent)
+                }
+                onClick={() => setAllocating(item.id)}
+              >
+                Reservas e progresso
               </Button>
             </li>
           ))}
@@ -177,7 +209,26 @@ export default function GoalsPanel({ ownerId, onExpired, intent, onIntent }) {
           </Button>
         )}
       </section>
-      {editing ? (
+      {allocationIntent && !allocating && (
+        <Button type="button" onClick={() => setAllocating(allocationIntent.goalId)}>
+          Retomar operação de reserva
+        </Button>
+      )}
+      {allocating ? (
+        <AllocationPanel
+          key={allocating}
+          ownerId={ownerId}
+          goalId={allocating}
+          intent={allocationIntent?.goalId === allocating ? allocationIntent : null}
+          onIntent={onAllocationIntent}
+          onExpired={onExpired}
+          onChanged={onFinancialChange}
+          onClose={() => {
+            setAllocating(null)
+            heading.current?.focus()
+          }}
+        />
+      ) : editing ? (
         <EditGoalPanel
           key={editing}
           ownerId={ownerId}
@@ -200,7 +251,7 @@ export default function GoalsPanel({ ownerId, onExpired, intent, onIntent }) {
           <GoalFields
             key={formKey}
             initial={intent?.data}
-            disabled={busy || loading || Boolean(intent)}
+            disabled={busy || loading || Boolean(intent) || Boolean(allocationIntent)}
             onSave={(data) => persist({ ownerId, key: crypto.randomUUID(), data })}
           />
           {intent && (

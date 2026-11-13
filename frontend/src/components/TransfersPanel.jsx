@@ -8,7 +8,13 @@ import PostTransferPanel from '@/components/PostTransferPanel'
 import EditTransferPanel from '@/components/EditTransferPanel'
 import DeleteTransferPanel from '@/components/DeleteTransferPanel'
 
-export default function TransfersPanel({ ownerId, onExpired, intent, onIntent }) {
+export default function TransfersPanel({
+  ownerId,
+  onExpired,
+  intent,
+  onIntent,
+  onFinancialChange,
+}) {
   const [accounts, setAccounts] = useState({ items: [], has_more: false })
   const [history, setHistory] = useState({ items: [], has_more: false })
   const [loading, setLoading] = useState(true)
@@ -20,7 +26,10 @@ export default function TransfersPanel({ ownerId, onExpired, intent, onIntent })
   const [deletingId, setDeletingId] = useState(null)
   const actionOpen = Boolean(postingId || editingId || deletingId)
   const heading = useRef(null)
-  const changed = useCallback(() => setBalanceRevision((value) => value + 1), [])
+  const changed = useCallback(() => {
+    setBalanceRevision((value) => value + 1)
+    onFinancialChange?.()
+  }, [onFinancialChange])
   const resolved = useCallback(
     (item) => {
       setHistory((previous) => ({
