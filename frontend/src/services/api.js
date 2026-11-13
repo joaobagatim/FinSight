@@ -638,6 +638,81 @@ export const api = {
         return submit()
       }
     }),
+  inspectImport: (ownerId, data) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send('/imports/inspect', {
+          method: 'POST',
+          data,
+          headers: { 'X-CSRF-Token': await bootstrap() },
+        })
+        if (
+          result?.account_id !== data.account_id ||
+          !Array.isArray(result.headers) ||
+          !Array.isArray(result.sample)
+        )
+          throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        if ((await renewUnlocked()).id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
+  createImport: (ownerId, data, key) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send('/imports', {
+          method: 'POST',
+          data,
+          headers: { 'X-CSRF-Token': await bootstrap(), 'Idempotency-Key': key },
+        })
+        if (
+          typeof result?.id !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result.id)
+        )
+          throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        if ((await renewUnlocked()).id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
+  imports: (ownerId, offset = 0) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/imports?limit=50&offset=${offset}`)
+      if (!Array.isArray(result?.items)) throw new ApiError(0)
+      return result
+    }),
+  importJob: (ownerId, id) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/imports/${encodeURIComponent(id)}`)
+      if (result?.id !== id) throw new ApiError(0)
+      return result
+    }),
+  importRows: (ownerId, id, offset = 0) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/imports/${encodeURIComponent(id)}/rows?limit=50&offset=${offset}`)
+      if (!Array.isArray(result?.items)) throw new ApiError(0)
+      return result
+    }),
   profile: () => authenticatedRead('/users/me'),
   register: (data) => send('/auth/register', { method: 'POST', data, credentials: 'omit' }),
   login: (email, password) =>

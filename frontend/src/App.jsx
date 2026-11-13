@@ -7,6 +7,7 @@ import TransactionsPanel from './components/TransactionsPanel.jsx'
 import TransfersPanel from './components/TransfersPanel.jsx'
 import BalancesPanel from './components/BalancesPanel.jsx'
 import GoalsPanel from './components/GoalsPanel.jsx'
+import ImportsPanel from './components/ImportsPanel.jsx'
 import ReservationAlerts from './components/ReservationAlerts.jsx'
 import { api, errorMessage, watchSessionChanges } from '@/services/api'
 import { Badge } from '@/components/ui/badge'
@@ -39,6 +40,7 @@ export default function App() {
   const [transferIntent, setTransferIntent] = useState(null)
   const [goalIntent, setGoalIntent] = useState(null)
   const [allocationIntent, setAllocationIntent] = useState(null)
+  const [importIntent, setImportIntent] = useState(null)
   const [financialRevision, setFinancialRevision] = useState(0)
   const financialChanged = useCallback(() => setFinancialRevision((value) => value + 1), [])
   const main = useRef(null)
@@ -57,6 +59,7 @@ export default function App() {
         setTransferIntent(null)
         setGoalIntent(null)
         setAllocationIntent(null)
+        setImportIntent(null)
         setBusy(false)
         setView('home')
         setNotice('Seu acesso mudou em outra aba. Acesse novamente para continuar.')
@@ -71,6 +74,7 @@ export default function App() {
     setTransferIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
     setGoalIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
     setAllocationIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
+    setImportIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
     setView('accounts')
     setNotice('')
   }, [])
@@ -82,6 +86,7 @@ export default function App() {
     setTransferIntent(null)
     setGoalIntent(null)
     setAllocationIntent(null)
+    setImportIntent(null)
     setView('access')
     setNotice('Sua sessão terminou. Entre novamente para continuar.')
   }, [])
@@ -105,6 +110,7 @@ export default function App() {
         setTransferIntent(null)
         setGoalIntent(null)
         setAllocationIntent(null)
+        setImportIntent(null)
         setView('access')
       } else {
         setNotice(errorMessage(error, 'Não foi possível acessar sua conta. Tente novamente.'))
@@ -125,6 +131,7 @@ export default function App() {
       setTransferIntent(null)
       setGoalIntent(null)
       setAllocationIntent(null)
+      setImportIntent(null)
       setView('home')
       requestAnimationFrame(() => main.current?.focus())
     } catch (error) {
@@ -161,9 +168,15 @@ export default function App() {
               </a>
             </Button>
           )}
-          {!['accounts', 'categories', 'transactions', 'transfers', 'balances', 'goals'].includes(
-            view,
-          ) && (
+          {![
+            'accounts',
+            'categories',
+            'transactions',
+            'transfers',
+            'balances',
+            'goals',
+            'imports',
+          ].includes(view) && (
             <Button type="button" size="sm" onClick={enter} disabled={busy}>
               {busy ? 'Aguarde…' : user ? 'Minhas contas' : 'Acessar FinSight'}
             </Button>
@@ -183,9 +196,15 @@ export default function App() {
           </p>
         )}
         {view === 'access' && <AuthPanel onAuthenticated={authenticated} />}
-        {['accounts', 'categories', 'transactions', 'transfers', 'balances', 'goals'].includes(
-          view,
-        ) &&
+        {[
+          'accounts',
+          'categories',
+          'transactions',
+          'transfers',
+          'balances',
+          'goals',
+          'imports',
+        ].includes(view) &&
           user && (
             <section className="workspace">
               <p className="eyebrow">Seu espaço</p>
@@ -242,6 +261,14 @@ export default function App() {
                 >
                   Metas
                 </Button>
+                <Button
+                  type="button"
+                  variant={view === 'imports' ? 'default' : 'outline'}
+                  aria-current={view === 'imports' ? 'page' : undefined}
+                  onClick={() => setView('imports')}
+                >
+                  Importações
+                </Button>
               </nav>
               <ReservationAlerts
                 key={user.id}
@@ -253,6 +280,14 @@ export default function App() {
                 <AccountsPanel key={user.id} ownerId={user.id} onExpired={expired} />
               ) : view === 'categories' ? (
                 <CategoriesPanel key={user.id} ownerId={user.id} onExpired={expired} />
+              ) : view === 'imports' ? (
+                <ImportsPanel
+                  key={user.id}
+                  ownerId={user.id}
+                  onExpired={expired}
+                  intent={importIntent?.ownerId === user.id ? importIntent : null}
+                  onIntent={setImportIntent}
+                />
               ) : view === 'goals' ? (
                 <GoalsPanel
                   key={user.id}
