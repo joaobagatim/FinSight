@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/services/api'
 import ImportRowEditor from '@/components/ImportRowEditor'
+import ImportDuplicates from '@/components/ImportDuplicates'
 import { importErrors, importStatuses, rowStatuses, reviewErrors } from '@/lib/imports'
 import { formatDate, formatMoney } from '@/lib/money'
 
@@ -15,6 +16,7 @@ export default function ImportPreview({ ownerId, jobId, onExpired, onClose, onUp
   const [selectionBlocked, setSelectionBlocked] = useState(false)
   const [notice, setNotice] = useState('')
   const [summaryStale, setSummaryStale] = useState(false)
+  const [duplicateRevision, setDuplicateRevision] = useState(0)
   const selectionWorking = useRef(false)
   const live = useRef(false),
     fetching = useRef(true),
@@ -89,6 +91,7 @@ export default function ImportPreview({ ownerId, jobId, onExpired, onClose, onUp
   }
   async function applyRow(row, message) {
     if (!live.current) return
+    setDuplicateRevision((value) => value + 1)
     setResult((previous) => ({
       ...previous,
       rows: {
@@ -246,6 +249,12 @@ export default function ImportPreview({ ownerId, jobId, onExpired, onClose, onUp
               eliminadas automaticamente.
             </p>
           )}
+          <ImportDuplicates
+            key={duplicateRevision}
+            ownerId={ownerId}
+            jobId={jobId}
+            onExpired={onExpired}
+          />
           <ol className="import-rows" aria-label="Registros da prévia">
             {result.rows.items.map((row) => (
               <li key={row.id} className="import-row">

@@ -78,6 +78,8 @@ Rotas autenticadas, com respostas `no-store`:
   strings, categoria, seleção, pendências, permissões de revisão e `etag` por
   registro. Acesso a job ausente ou alheio retorna 404.
 - `GET /api/v1/imports/{id}/rows/{row_id}`: versão atual com cabeçalho `ETag`.
+- `GET /api/v1/imports/{id}/duplicates`: conferência informativa de possíveis
+  duplicatas, por usuário e conta, sem modificar os registros.
 - `PATCH /api/v1/imports/{id}/rows/{row_id}`: correção completa de
   `transaction_date`, `description`, `amount` positivo em string decimal, `type`
   (`income`/`expense`) e `category_id` opcional/null. Desmarca a seleção,
@@ -111,8 +113,8 @@ juntos, sob o mesmo lock de usuário das operações financeiras. Falha desfaz t
 A mesma chave e conteúdo normalizado da intenção retornam o mesmo job, inclusive
 após arquivar a conta; outra entrada com a mesma chave retorna 409. Uma chave nova
 cria outra prévia e o checksum apenas avisa sobre arquivos iguais: não elimina
-compras idênticas nem autoriza gravação de transações. Duplicidade por período ou
-fingerprint e confirmação financeira continuam futuras. Repetir a criação
+compras idênticas nem autoriza gravação de transações. A confirmação financeira
+continua futura. Repetir a criação
 original não restaura dados anteriores nem desfaz decisões de revisão.
 
 Requer a revisão Alembic `0016_import_review_selection`, filha de 0015.
@@ -122,6 +124,40 @@ consistência. Permanecem 18 tabelas incluindo `alembic_version`. O downgrade
 0016 → 0015 recusa descartar seleções existentes; sem seleções, preserva os dados
 corrigidos e categorias. A 0015 também protege chaves retidas. Migrações não são aplicadas no startup nem ao banco
 pessoal automaticamente. Não há nova dependência nesta entrega.
+
+### Conferir possíveis duplicatas
+
+Na prévia, **Verificar possíveis duplicatas** consulta os dados atuais da mesma
+conta e usuário. A conferência é informativa: não exclui, desmarca, confirma ou
+escolhe automaticamente quais registros devem ser importados. Duas compras reais
+podem ter os mesmos dados. Lançamentos planejados também entram na comparação.
+
+O fingerprint combina conta, data, valor exato, tipo e descrição normalizada
+(Unicode NFKC, comparação sem diferença de maiúsculas/minúsculas e espaços
+equivalentes). Acentos e pontuação não são removidos. Referências externas são
+comparadas exatamente, inclusive quando os demais dados ou as datas diferem.
+O relatório distingue coincidências nesta prévia, em outras prévias da conta e
+em lançamentos existentes. Não devolve os dados dos registros encontrados.
+
+Prévias canceladas/falhas e lançamentos removidos ficam fora da busca histórica.
+Registros inválidos, incompletos ou ignorados são informados como não conferidos
+por dados/referência. O aviso de período considera o intervalo das datas
+interpretadas de outras prévias em revisão/concluídas; sobreposição de intervalos
+não comprova duplicidade de cada registro. Arquivo igual continua com aviso próprio.
+
+São conferidos até 5.000 registros de origem e até 10.000 candidatos históricos
+por fonte (outras prévias e lançamentos). Atingir o limite indica resultado
+parcial, sem afirmar ausência de outras coincidências. O resultado é um retrato
+da conferência: repita após novas prévias ou alterações em outra tela. Corrigir
+ou selecionar registros limpa o relatório mostrado para evitar avisos antigos.
+Os avisos são apresentados de 50 em 50 na tela. Falha de consulta não significa
+ausência de duplicatas e remove o resultado anterior.
+
+A API usa sessão, autorização própria, respostas `no-store` e o lock de usuário
+compartilhado com mutações durante a leitura. Fingerprints são calculados em
+memória a partir dos dados atuais; o serviço não grava fingerprint/status ou
+seleção no banco. A futura confirmação financeira deverá revalidar os dados e a
+idempotência separadamente. Sem nova dependência, tabela ou migração nesta etapa.
 
 ### Importação CSV — núcleo inicial
 

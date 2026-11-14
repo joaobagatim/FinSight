@@ -240,3 +240,125 @@ test('review preserves conflict drafts, recovers lost selection responses and al
   await expect(selection).toBeDisabled()
   expect((await (await api.get(base + '/transactions')).json()).items).toEqual([])
 })
+
+test('duplicate warnings are advisory, scoped and refreshed after record review at 320px', async ({
+  page,
+  request,
+}) => {
+  await page.setViewportSize({ width: 320, height: 950 })
+  const { api, accountId, categoryId, preview } = await setup(page, request)
+  await page.addStyleTag({ content: 'html{font-size:18px}' })
+  const warnings = preview.getByRole('region', { name: 'Possíveis duplicatas', exact: true })
+  await warnings
+    .getByRole('button', { name: 'Verificar possíveis duplicatas', exact: true })
+    .click()
+  await expect(warnings).toContainText('Nenhuma coincidência encontrada nos registros conferidos.')
+  await preview.getByRole('button', { name: 'Revisar registro 2', exact: true }).click()
+  await page.getByLabel('Data do registro', { exact: true }).fill('2026-01-02')
+  await page.getByLabel('Descrição do registro', { exact: true }).fill('Revisar compra')
+  await page.getByLabel('Valor absoluto (R$)', { exact: true }).fill('20,00')
+  await page
+    .getByRole('combobox', { name: 'Categoria do registro', exact: true })
+    .selectOption(categoryId)
+  await page.getByRole('button', { name: 'Salvar correção do registro', exact: true }).click()
+  await expect(
+    warnings.getByText('Nenhuma coincidência encontrada nos registros conferidos.', {
+      exact: false,
+    }),
+  ).toHaveCount(0)
+  await warnings
+    .getByRole('button', { name: 'Verificar possíveis duplicatas', exact: true })
+    .click()
+  await expect(
+    warnings.getByText('Dados equivalentes a outro registro desta prévia.', { exact: true }),
+  ).toHaveCount(2)
+  const selection = preview.getByRole('checkbox', { name: 'Selecionar registro 2', exact: true })
+  await selection.click()
+  await expect(selection).toBeChecked()
+  await expect(
+    warnings.getByText('Dados equivalentes a outro registro desta prévia.', { exact: true }),
+  ).toHaveCount(0)
+  const headers = {
+    Origin: sessionOrigin,
+    'X-CSRF-Token': await sessionCsrf(api),
+    'Idempotency-Key': randomUUID(),
+  }
+  expect(
+    (
+      await api.post(base + '/transactions', {
+        headers,
+        data: {
+          account_id: accountId,
+          category_id: categoryId,
+          description: 'REVISAR COMPRA',
+          amount: '20.00',
+          type: 'expense',
+          status: 'planned',
+          effective_date: '2026-01-02',
+        },
+      })
+    ).status(),
+  ).toBe(201)
+  expect(
+    (
+      await api.post(base + '/imports', {
+        headers: { ...headers, 'Idempotency-Key': randomUUID() },
+        data: {
+          account_id: accountId,
+          filename: 'synthetic-overlap.csv',
+          content_base64: Buffer.from(
+            'Date;Description;Amount\n2026-01-02;Revisar compra;-20.00',
+          ).toString('base64'),
+          mapping: {
+            date_column: 0,
+            description_column: 1,
+            amount_column: 2,
+            date_format: 'iso',
+            money_format: 'decimal-dot',
+          },
+        },
+      })
+    ).status(),
+  ).toBe(201)
+  await warnings
+    .getByRole('button', { name: 'Verificar possíveis duplicatas', exact: true })
+    .click()
+  await expect(warnings).toContainText('período sobreposto')
+  await expect(
+    warnings.getByText('Dados equivalentes a um lançamento existente nesta conta.', {
+      exact: true,
+    }),
+  ).toHaveCount(2)
+  await expect(
+    warnings.getByText('Dados equivalentes em outra prévia desta conta.', { exact: true }),
+  ).toHaveCount(2)
+  await expect(selection).toBeChecked()
+  await page.route(
+    '**/api/v1/imports/*/duplicates',
+    (route) =>
+      route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: '{"detail":"Synthetic unavailable report"}',
+      }),
+    { times: 1 },
+  )
+  await warnings
+    .getByRole('button', { name: 'Verificar possíveis duplicatas', exact: true })
+    .click()
+  await expect(warnings.getByRole('alert')).toContainText('Não foi possível conferir duplicatas')
+  await expect(
+    warnings.getByText('Dados equivalentes em outra prévia desta conta.', { exact: true }),
+  ).toHaveCount(0)
+  await warnings
+    .getByRole('button', { name: 'Verificar possíveis duplicatas', exact: true })
+    .click()
+  await expect(warnings).toContainText('período sobreposto')
+  await expect(selection).toBeChecked()
+  expect((await (await api.get(base + '/transactions')).json()).items).toHaveLength(1)
+  expect(
+    (await (await api.get(`${base}/accounts/${accountId}/balance?as_of=2026-01-31`)).json())
+      .balance,
+  ).toBe('1000.00')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false)
+})
