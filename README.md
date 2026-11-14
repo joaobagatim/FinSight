@@ -31,7 +31,8 @@ permite corrigir data, descrição, valor absoluto, tipo e categoria. A seleçã
 começa desmarcada e exige dados válidos, conta ativa e categoria própria ativa
 do mesmo tipo. Salvar uma correção desmarca o registro para nova conferência.
 Correção e seleção preservam as páginas já carregadas. Não há botão de
-confirmação financeira nesta entrega. Transferências e estornos
+confirmação financeira na interface nesta entrega; a API técnica descrita abaixo
+já permite confirmação explícita. Transferências e estornos
 precisam ser conferidos: o sinal do valor sozinho não comprova sua natureza.
 Uma prévia cria um vínculo com a conta, considerado pela proteção existente da
 referência de abertura. Se precisar redefini-la, faça isso antes de guardar o job.
@@ -52,7 +53,7 @@ Um registro selecionado pode ser desmarcado mesmo após arquivar sua conta ou
 categoria; esses estados impedem novas seleções. Prévias encerradas e registros
 já vinculados a lançamentos ficam protegidos contra alterações.
 
-A revisão requer a migração 0016, sem nova dependência.
+A API de importação atual requer a migração 0017, sem nova dependência.
 O ambiente e o banco pessoais não são atualizados automaticamente.
 
 ### API de upload e prévia CSV
@@ -61,8 +62,9 @@ A API permite inspecionar e guardar uma prévia em uma conta própria ativa em B
 O CSV original é processado em memória e não é salvo em disco ou no banco. Somente
 metadados e linhas normalizadas da prévia são persistidos. Esses dados continuam
 sensíveis e são consultados somente pelo proprietário autenticado.
-A interface acima consome essas rotas. Não há confirmação financeira nesta
-etapa: nenhuma transação, transferência ou reserva é criada por essas rotas.
+A interface acima consome as rotas de prévia e revisão. Essas operações não
+criam transações, transferências ou reservas. A confirmação financeira é uma
+operação separada e explícita, disponível na API; sua tela ainda será entregue.
 
 Rotas autenticadas, com respostas `no-store`:
 
@@ -80,6 +82,10 @@ Rotas autenticadas, com respostas `no-store`:
 - `GET /api/v1/imports/{id}/rows/{row_id}`: versão atual com cabeçalho `ETag`.
 - `GET /api/v1/imports/{id}/duplicates`: conferência informativa de possíveis
   duplicatas, por usuário e conta, sem modificar os registros.
+- `GET /api/v1/imports/{id}/confirmation`: seleção atual, totais, avisos e impacto
+  no saldo/reservas, com `ETag`. Depois de concluir, devolve o recibo retido.
+- `POST /api/v1/imports/{id}/confirm`: confirma a seleção consultada, com
+  Origin/CSRF, `If-Match` e `Idempotency-Key` UUIDv4. Veja o contrato abaixo.
 - `PATCH /api/v1/imports/{id}/rows/{row_id}`: correção completa de
   `transaction_date`, `description`, `amount` positivo em string decimal, `type`
   (`income`/`expense`) e `category_id` opcional/null. Desmarca a seleção,
@@ -114,16 +120,76 @@ A mesma chave e conteúdo normalizado da intenção retornam o mesmo job, inclus
 após arquivar a conta; outra entrada com a mesma chave retorna 409. Uma chave nova
 cria outra prévia e o checksum apenas avisa sobre arquivos iguais: não elimina
 compras idênticas nem autoriza gravação de transações. A confirmação financeira
-continua futura. Repetir a criação
+exige a operação explícita separada. Repetir a criação
 original não restaura dados anteriores nem desfaz decisões de revisão.
 
-Requer a revisão Alembic `0016_import_review_selection`, filha de 0015.
+Requer a revisão Alembic `0017_import_confirmation`, filha de 0016.
 A 0015 mantém a memória de repetição e o índice de checksum por usuário/conta;
 a 0016 adiciona `import_rows.selected`, inicialmente falso, e restrição de
 consistência. Permanecem 18 tabelas incluindo `alembic_version`. O downgrade
 0016 → 0015 recusa descartar seleções existentes; sem seleções, preserva os dados
-corrigidos e categorias. A 0015 também protege chaves retidas. Migrações não são aplicadas no startup nem ao banco
+corrigidos e categorias. A 0017 acrescenta chave de confirmação, hash da intenção
+e recibo JSONB no job, com unicidade por usuário/chave e restrição de consistência.
+Não acrescenta tabela: permanecem 18. A 0017 recusa downgrade enquanto houver
+confirmações retidas. Jobs anteriores recebem campos nulos, sem importar ou
+alterar dados existentes. A 0015 também protege chaves retidas. Migrações não são aplicadas no startup nem ao banco
 pessoal automaticamente. Não há nova dependência nesta entrega.
+
+### API de confirmação da seleção CSV
+
+Consulte `GET /api/v1/imports/{id}/confirmation` antes de confirmar. A resposta
+contém os registros selecionados, elegibilidade e pendências, receitas/despesas
+totais, quantidade com data futura, avisos de duplicidade referentes à seleção e
+posição de saldo/reservas. `as_of` é hoje em São Paulo ou a abertura da conta,
+quando ela ainda é futura. Movimentos posteriores a essa data não entram no saldo
+mostrado; manterão a data original após importação. Todos os valores monetários
+são strings decimais exatas.
+
+Use o `ETag` consultado em `If-Match`, uma chave UUIDv4 nova para essa intenção
+em `Idempotency-Key` e este corpo JSON (limite de 16 KiB):
+
+```json
+{
+  "acknowledge_duplicates": true,
+  "acknowledge_classification": true,
+  "acknowledge_reservations": true
+}
+```
+
+Os três reconhecimentos são obrigatórios e estritos. Não envie IDs de usuário,
+conta, linhas ou valores: a seleção e as referências são obtidas no servidor.
+Confira possíveis duplicatas e resultados parciais, classifique transferências
+e estornos manualmente e desmarque o que não deve virar receita/despesa.
+Confirme conscientemente o impacto sobre reservas. Os avisos não eliminam
+automaticamente duas compras legítimas com dados iguais.
+
+A operação revalida a versão, seleção, conta/categorias ativas e compatíveis,
+datas após abertura, duplicidades e posição financeira sob o lock do usuário.
+Mudanças tornam a versão antiga inválida (`412`); recarregue e revise antes de
+iniciar outra intenção. Seleção vazia/incompatível retorna `422`; prévia fechada
+ou vínculos financeiros incompatíveis retornam `409`. Acesso alheio/ausente
+retorna `404`; sessão e Origin/CSRF são obrigatórios.
+
+Uma única transação SQL cria somente os selecionados como `posted`, preservando
+datas/valores/categorias e o vínculo único com cada linha. As linhas importadas
+ficam desmarcadas e imutáveis pela revisão; válidas não selecionadas ficam
+`ignored`, inválidas continuam identificadas. O job termina em `completed` e não
+aceita um segundo lote. Falha desfaz lançamentos, estados, contadores e recibo.
+Reservas não são liberadas ou reduzidas: despesas são permitidas e o recibo
+informa saldo livre negativo/reserva descoberta quando houver.
+
+O resultado `200` contém quantidades importadas/não importadas (esta última inclui
+inválidas), valores, posição financeira em `as_of` e data/hora da confirmação.
+É um recibo histórico, não um saldo atual. Depois de uma resposta perdida,
+consulte o contexto para recuperar esse recibo ou repita a mesma chave, corpo e
+`If-Match`; a API retorna o resultado original sem novos lançamentos, inclusive
+após arquivar conta/categoria. Reutilizar a chave com outra versão/entrada ou
+usar nova chave em job já confirmado retorna `409`. Repetir o upload original
+não restaura a prévia nem os lançamentos. Nenhum fluxo de estorno, exclusão de
+importados ou segunda confirmação do mesmo job é disponibilizado nesta unidade.
+
+A interface ainda oferece somente revisão e consulta de prévias. A tela de
+confirmação e recuperação da intenção será a próxima unidade da Fase 4.
 
 ### Conferir possíveis duplicatas
 
@@ -156,8 +222,8 @@ ausência de duplicatas e remove o resultado anterior.
 A API usa sessão, autorização própria, respostas `no-store` e o lock de usuário
 compartilhado com mutações durante a leitura. Fingerprints são calculados em
 memória a partir dos dados atuais; o serviço não grava fingerprint/status ou
-seleção no banco. A futura confirmação financeira deverá revalidar os dados e a
-idempotência separadamente. Sem nova dependência, tabela ou migração nesta etapa.
+seleção no banco. A API de confirmação revalida esses dados e a idempotência em
+uma operação separada. A conferência de duplicatas não exige migração adicional.
 
 ### Importação CSV — núcleo inicial
 

@@ -1,4 +1,4 @@
-"""Sensitive owned CSV preview operations, intentionally without confirmation routes."""
+"""Owned CSV previews, review and explicit atomic financial confirmation."""
 
 from typing import Annotated
 from uuid import UUID
@@ -8,6 +8,11 @@ from pydantic import SecretStr
 
 from app.api.dependencies import get_session_service
 from app.api.financial_auth import creation_key, financial_access, financial_mutation
+from app.schemas.import_confirmation import (
+    ImportConfirmationContext,
+    ImportConfirmationInput,
+    ImportConfirmationReceipt,
+)
 from app.schemas.import_duplicates import DuplicateReport
 from app.schemas.import_review import ImportRowEditInput, ImportSelectionInput
 from app.schemas.imports import (
@@ -20,6 +25,7 @@ from app.schemas.imports import (
     ImportRowsResponse,
     ImportSourceInput,
 )
+from app.services.import_confirmation import ImportConfirmationService
 from app.services.import_duplicates import ImportDuplicateService
 from app.services.import_review import ImportReviewService
 from app.services.imports import ImportService
@@ -100,6 +106,30 @@ def get_duplicate_report(
 ReviewETag = Annotated[
     str, Header(alias="If-Match", min_length=66, max_length=66, pattern=r'^"[0-9a-f]{64}"$')
 ]
+
+
+@router.get("/{identity}/confirmation", response_model=ImportConfirmationContext)
+def get_confirmation(
+    identity: UUID,
+    response: Response,
+    token: Annotated[SecretStr, Depends(financial_access)],
+    sessions: Annotated[SessionService, Depends(get_session_service)],
+):
+    result = ImportConfirmationService(sessions).get(token, identity)
+    response.headers["ETag"] = result.etag
+    return result
+
+
+@router.post("/{identity}/confirm", response_model=ImportConfirmationReceipt)
+def confirm_selection(
+    identity: UUID,
+    data: ImportConfirmationInput,
+    token: Annotated[SecretStr, Depends(financial_mutation)],
+    key: Annotated[UUID, Depends(creation_key)],
+    etag: ReviewETag,
+    sessions: Annotated[SessionService, Depends(get_session_service)],
+):
+    return ImportConfirmationService(sessions).confirm(token, identity, key, etag, data)
 
 
 @router.get("/{identity}/rows/{row_id}", response_model=ImportRowResponse)
