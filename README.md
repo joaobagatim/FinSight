@@ -26,9 +26,12 @@ zero. **Carregar mais registros da prévia** e o histórico usam a paginação r
 Prévias de contas arquivadas continuam consultáveis. O aviso de arquivo igual
 não elimina compras idênticas nem substitui uma revisão de duplicidades.
 
-Criar uma prévia **não altera saldos nem cria lançamentos**. Não há botão de
-confirmação financeira nesta entrega; correção, categorização, seleção e
-confirmação serão acrescentadas ao fluxo de revisão. Transferências e estornos
+Criar uma prévia **não altera saldos nem cria lançamentos**. **Revisar registro**
+permite corrigir data, descrição, valor absoluto, tipo e categoria. A seleção
+começa desmarcada e exige dados válidos, conta ativa e categoria própria ativa
+do mesmo tipo. Salvar uma correção desmarca o registro para nova conferência.
+Correção e seleção preservam as páginas já carregadas. Não há botão de
+confirmação financeira nesta entrega. Transferências e estornos
 precisam ser conferidos: o sinal do valor sozinho não comprova sua natureza.
 Uma prévia cria um vínculo com a conta, considerado pela proteção existente da
 referência de abertura. Se precisar redefini-la, faça isso antes de guardar o job.
@@ -43,7 +46,13 @@ limpam. Arquivos e intenções não vão para localStorage/sessionStorage ou log
 
 O frontend confere o perfil ativo antes de cada chamada protegida e usa a sessão
 e CSRF existentes. O backend continua responsável pela autorização e validação.
-Sem alteração de schema/dependência nesta interface; a API requer a revisão 0015.
+Conflitos preservam o rascunho e exigem recarregar a revisão antes de salvar.
+Após resposta perdida, recarregue para consultar o resultado antes de reenviar.
+Um registro selecionado pode ser desmarcado mesmo após arquivar sua conta ou
+categoria; esses estados impedem novas seleções. Prévias encerradas e registros
+já vinculados a lançamentos ficam protegidos contra alterações.
+
+A revisão requer a migração 0016, sem nova dependência.
 O ambiente e o banco pessoais não são atualizados automaticamente.
 
 ### API de upload e prévia CSV
@@ -66,7 +75,21 @@ Rotas autenticadas, com respostas `no-store`:
 - `GET /api/v1/imports/{id}`: metadados, contadores, inválidas e quantidade de
   outros jobs da mesma conta com o mesmo checksum.
 - `GET /api/v1/imports/{id}/rows`: registros da prévia paginados, valores exatos em
-  strings e códigos de erro. Acesso a job ausente ou alheio retorna 404.
+  strings, categoria, seleção, pendências, permissões de revisão e `etag` por
+  registro. Acesso a job ausente ou alheio retorna 404.
+- `GET /api/v1/imports/{id}/rows/{row_id}`: versão atual com cabeçalho `ETag`.
+- `PATCH /api/v1/imports/{id}/rows/{row_id}`: correção completa de
+  `transaction_date`, `description`, `amount` positivo em string decimal, `type`
+  (`income`/`expense`) e `category_id` opcional/null. Desmarca a seleção,
+  normaliza o registro para `pending` e preserva sua identidade de origem.
+- `PATCH /api/v1/imports/{id}/rows/{row_id}/selection`: somente
+  `{"selected": true}` ou `false`, sem criar movimentos financeiros.
+
+As duas rotas PATCH exigem Origin/CSRF e `If-Match` da versão consultada.
+Retornam 412 para versão desatualizada, 409 para revisão encerrada/vínculo
+financeiro e 422 para dados incompatíveis. A API obtém proprietário, conta e
+estado no servidor, coordena mutações sob lock e devolve nova versão. Contadores
+do job incluem `selected_rows`; a seleção não equivale a aprovação financeira.
 
 O transporte é JSON com `account_id`, `filename` (somente nome-base `.csv`),
 `content_base64` (bytes do CSV codificados em base64) e `delimiter` opcional
@@ -89,12 +112,15 @@ A mesma chave e conteúdo normalizado da intenção retornam o mesmo job, inclus
 após arquivar a conta; outra entrada com a mesma chave retorna 409. Uma chave nova
 cria outra prévia e o checksum apenas avisa sobre arquivos iguais: não elimina
 compras idênticas nem autoriza gravação de transações. Duplicidade por período ou
-fingerprint, edição/categorização/seleção e confirmação continuam futuras.
+fingerprint e confirmação financeira continuam futuras. Repetir a criação
+original não restaura dados anteriores nem desfaz decisões de revisão.
 
-Requer a revisão Alembic `0015_import_creation_requests`: tabela técnica de
-repetição e índice de checksum por usuário/conta, total de 18 tabelas incluindo
-`alembic_version`. O downgrade recusa descartar chaves retidas e preserva os jobs
-e registros existentes. Migrações não são aplicadas no startup nem ao banco
+Requer a revisão Alembic `0016_import_review_selection`, filha de 0015.
+A 0015 mantém a memória de repetição e o índice de checksum por usuário/conta;
+a 0016 adiciona `import_rows.selected`, inicialmente falso, e restrição de
+consistência. Permanecem 18 tabelas incluindo `alembic_version`. O downgrade
+0016 → 0015 recusa descartar seleções existentes; sem seleções, preserva os dados
+corrigidos e categorias. A 0015 também protege chaves retidas. Migrações não são aplicadas no startup nem ao banco
 pessoal automaticamente. Não há nova dependência nesta entrega.
 
 ### Importação CSV — núcleo inicial

@@ -93,6 +93,12 @@ export default function ImportsPanel({ ownerId, intent, onIntent, onExpired }) {
           jobId={selected}
           onExpired={onExpired}
           onClose={() => setSelected(null)}
+          onUpdated={(summary) =>
+            setPage((previous) => ({
+              ...previous,
+              items: previous.items.map((item) => (item.id === summary.id ? summary : item)),
+            }))
+          }
         />
       ) : (
         <ImportUpload

@@ -15,6 +15,15 @@ export const rowStatuses = {
   ignored: 'Ignorado',
 }
 
+export const reviewErrors = {
+  review_closed: 'A prévia ou o registro não permite mais revisão.',
+  account_archived: 'A conta está arquivada; não é possível incluir novos registros na seleção.',
+  record_invalid: 'Corrija os dados do registro antes de selecionar.',
+  category_required: 'Escolha uma categoria para poder selecionar este registro.',
+  category_unavailable: 'A categoria não está disponível; escolha outra para revisar a seleção.',
+  category_type_mismatch: 'A categoria precisa ser compatível com receita ou despesa.',
+}
+
 export const importErrors = {
   column_count: 'Quantidade de colunas diferente do cabeçalho.',
   invalid_date: 'Data inválida.',

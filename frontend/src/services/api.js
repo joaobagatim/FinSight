@@ -713,6 +713,77 @@ export const api = {
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
     }),
+  importRow: (ownerId, jobId, rowId) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(
+        `/imports/${encodeURIComponent(jobId)}/rows/${encodeURIComponent(rowId)}`,
+        { versioned: true },
+      )
+      if (result.data?.id !== rowId || result.data.etag !== result.etag) throw new ApiError(0)
+      return result
+    }),
+  updateImportRow: (ownerId, jobId, rowId, data, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send(
+          `/imports/${encodeURIComponent(jobId)}/rows/${encodeURIComponent(rowId)}`,
+          {
+            method: 'PATCH',
+            data,
+            versioned: true,
+            headers: { 'If-Match': etag, 'X-CSRF-Token': await bootstrap() },
+          },
+        )
+        if (
+          result.data?.id !== rowId ||
+          result.data.etag !== result.etag ||
+          result.data.selected !== false
+        )
+          throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        if ((await renewUnlocked()).id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
+  selectImportRow: (ownerId, jobId, rowId, selected, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send(
+          `/imports/${encodeURIComponent(jobId)}/rows/${encodeURIComponent(rowId)}/selection`,
+          {
+            method: 'PATCH',
+            data: { selected },
+            versioned: true,
+            headers: { 'If-Match': etag, 'X-CSRF-Token': await bootstrap() },
+          },
+        )
+        if (
+          result.data?.id !== rowId ||
+          result.data.etag !== result.etag ||
+          result.data.selected !== selected
+        )
+          throw new ApiError(0)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (error) {
+        if (error.status !== 401) throw error
+        if ((await renewUnlocked()).id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
+    }),
   profile: () => authenticatedRead('/users/me'),
   register: (data) => send('/auth/register', { method: 'POST', data, credentials: 'omit' }),
   login: (email, password) =>
