@@ -220,8 +220,12 @@ def test_preview_http_is_owned_private_and_never_creates_financial_movements(con
         assert {item["account_id"] for item in other.get(PATH).json()["items"]} == {
             str(other_account)
         }
-        for endpoint in [path + "/confirm", path + "/post"]:
-            assert owner.post(endpoint, json={}, headers=headers(owner)).status_code == 404
+        confirmation_status = owner.post(
+            path + "/confirm", json={}, headers=headers(owner)
+        ).status_code
+        posting_status = owner.post(path + "/post", json={}, headers=headers(owner)).status_code
+        assert confirmation_status == 422
+        assert posting_status == 404
     assert TransactionService(sessions).balance(
         token, account, date(2026, 1, 2)
     ).balance == Decimal("1000.00")
