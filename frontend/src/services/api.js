@@ -119,6 +119,39 @@ async function authenticatedRead(path) {
   })
 }
 
+function validImportAmounts(result) {
+  const amounts = [
+    'income_total',
+    'expense_total',
+    'bank_balance_before',
+    'bank_balance_after',
+    'reserved_amount',
+    'free_balance_after',
+    'uncovered_reserved_after',
+  ]
+  return (
+    result &&
+    amounts.every(
+      (field) => typeof result[field] === 'string' && /^-?\d+\.\d{2}$/.test(result[field]),
+    ) &&
+    typeof result.as_of === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(result.as_of)
+  )
+}
+
+function validateImportReceipt(result, jobId) {
+  if (
+    !validImportAmounts(result) ||
+    result?.job_id !== jobId ||
+    !Number.isSafeInteger(result.imported_rows) ||
+    result.imported_rows < 1 ||
+    !Number.isSafeInteger(result.not_imported_rows) ||
+    result.not_imported_rows < 0 ||
+    !Number.isFinite(Date.parse(result.completed_at))
+  )
+    throw new ApiError(0)
+}
+
 export const api = {
   createGoal: (ownerId, data, key) =>
     coordinated(async () => {
@@ -712,6 +745,48 @@ export const api = {
       const result = await send(`/imports/${encodeURIComponent(id)}/rows?limit=50&offset=${offset}`)
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
+    }),
+  importConfirmation: (ownerId, jobId) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/imports/${encodeURIComponent(jobId)}/confirmation`, {
+        versioned: true,
+      })
+      if (
+        !validImportAmounts(result.data) ||
+        typeof result.data.eligible !== 'boolean' ||
+        result.data?.job_id !== jobId ||
+        result.data.etag !== result.etag ||
+        !Array.isArray(result.data.selected_rows) ||
+        !Array.isArray(result.data.issues) ||
+        !Number.isSafeInteger(result.data.selected_count) ||
+        result.data.selected_rows.length !== result.data.selected_count
+      )
+        throw new ApiError(0)
+      if (result.data.receipt) validateImportReceipt(result.data.receipt, jobId)
+      return result
+    }),
+  confirmImport: (ownerId, jobId, data, key, etag) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const submit = async () => {
+        const result = await send(`/imports/${encodeURIComponent(jobId)}/confirm`, {
+          method: 'POST',
+          data,
+          headers: { 'X-CSRF-Token': await bootstrap(), 'Idempotency-Key': key, 'If-Match': etag },
+        })
+        validateImportReceipt(result, jobId)
+        return result
+      }
+      try {
+        return await submit()
+      } catch (failure) {
+        if (failure.status !== 401) throw failure
+        if ((await renewUnlocked()).id !== ownerId) throw new ApiError(401)
+        return submit()
+      }
     }),
   importDuplicates: (ownerId, jobId) =>
     coordinated(async () => {
