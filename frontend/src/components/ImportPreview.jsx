@@ -6,7 +6,15 @@ import ImportDuplicates from '@/components/ImportDuplicates'
 import { importErrors, importStatuses, rowStatuses, reviewErrors } from '@/lib/imports'
 import { formatDate, formatMoney } from '@/lib/money'
 
-export default function ImportPreview({ ownerId, jobId, onExpired, onClose, onUpdated }) {
+export default function ImportPreview({
+  ownerId,
+  jobId,
+  onExpired,
+  onClose,
+  onUpdated,
+  onConfirm,
+  confirmationBlocked,
+}) {
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -346,6 +354,17 @@ export default function ImportPreview({ ownerId, jobId, onExpired, onClose, onUp
         </>
       )}
       <div className="account-actions">
+        {result && (
+          <Button
+            type="button"
+            disabled={loading || selecting || confirmationBlocked}
+            onClick={onConfirm}
+          >
+            {result.summary.status === 'completed'
+              ? 'Consultar recibo da importação'
+              : 'Conferir confirmação da seleção'}
+          </Button>
+        )}
         <Button type="button" variant="outline" disabled={loading || selecting} onClick={reload}>
           Recarregar prévia
         </Button>

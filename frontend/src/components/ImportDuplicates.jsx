@@ -2,15 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/services/api'
 import { formatDate } from '@/lib/money'
-
-const reasons = {
-  same_preview_fingerprint: 'Dados equivalentes a outro registro desta prévia.',
-  same_preview_external_id: 'Referência externa repetida nesta prévia.',
-  other_preview_fingerprint: 'Dados equivalentes em outra prévia desta conta.',
-  other_preview_external_id: 'Mesma referência externa em outra prévia desta conta.',
-  transaction_fingerprint: 'Dados equivalentes a um lançamento existente nesta conta.',
-  transaction_external_id: 'Mesma referência externa de um lançamento existente nesta conta.',
-}
+import { duplicateReasons as reasons } from '@/lib/imports'
 
 export default function ImportDuplicates({ ownerId, jobId, onExpired }) {
   const [result, setResult] = useState(null)

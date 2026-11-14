@@ -1,13 +1,23 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import ImportUpload from '@/components/ImportUpload'
 import ImportPreview from '@/components/ImportPreview'
+import ImportConfirmation from '@/components/ImportConfirmation'
 import { api } from '@/services/api'
 import { importStatuses } from '@/lib/imports'
 
-export default function ImportsPanel({ ownerId, intent, onIntent, onExpired }) {
+export default function ImportsPanel({
+  ownerId,
+  intent,
+  onIntent,
+  onExpired,
+  confirmationIntent,
+  onConfirmationIntent,
+  onFinancialChange,
+}) {
   const [page, setPage] = useState({ items: [], has_more: false })
-  const [selected, setSelected] = useState(null)
+  const [selected, setSelected] = useState(() => confirmationIntent?.jobId ?? null)
+  const [confirming, setConfirming] = useState(() => Boolean(confirmationIntent))
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -39,6 +49,12 @@ export default function ImportsPanel({ ownerId, intent, onIntent, onExpired }) {
       live.current = false
     }
   }, [ownerId, onExpired, refresh])
+  const completed = useCallback(() => {
+    if (!live.current) return
+    onFinancialChange?.()
+    setLoading(true)
+    setRefresh((value) => value + 1)
+  }, [onFinancialChange])
   function reload() {
     if (fetching.current) return
     fetching.current = true
@@ -74,7 +90,8 @@ export default function ImportsPanel({ ownerId, intent, onIntent, onExpired }) {
       </div>
       <p className="field-hint">
         Analise seu arquivo, escolha as colunas e guarde uma prévia para conferência. Esta etapa não
-        altera os saldos das contas.
+        altera os saldos das contas. Somente a confirmação explícita cria os lançamentos
+        selecionados.
       </p>
       {notice && (
         <p role="status" className="notice notice-success">
@@ -86,11 +103,38 @@ export default function ImportsPanel({ ownerId, intent, onIntent, onExpired }) {
           Retomar tentativa de prévia
         </Button>
       )}
-      {selected ? (
+      {confirmationIntent && (!confirming || selected !== confirmationIntent.jobId) && (
+        <Button
+          type="button"
+          onClick={() => {
+            setSelected(confirmationIntent.jobId)
+            setConfirming(true)
+          }}
+        >
+          Retomar confirmação pendente
+        </Button>
+      )}
+      {selected && confirming ? (
+        <ImportConfirmation
+          key={selected}
+          ownerId={ownerId}
+          jobId={selected}
+          intent={confirmationIntent}
+          onIntent={onConfirmationIntent}
+          onExpired={onExpired}
+          onCompleted={completed}
+          onClose={() => {
+            setConfirming(false)
+            reload()
+          }}
+        />
+      ) : selected ? (
         <ImportPreview
           key={selected}
           ownerId={ownerId}
           jobId={selected}
+          onConfirm={() => setConfirming(true)}
+          confirmationBlocked={Boolean(confirmationIntent && confirmationIntent.jobId !== selected)}
           onExpired={onExpired}
           onClose={() => setSelected(null)}
           onUpdated={(summary) =>
@@ -139,6 +183,7 @@ export default function ImportsPanel({ ownerId, intent, onIntent, onExpired }) {
                 onClick={() => {
                   setNotice('')
                   setSelected(item.id)
+                  setConfirming(false)
                 }}
               >
                 Consultar prévia
