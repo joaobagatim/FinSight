@@ -909,3 +909,15 @@ fieldset {
   height: 20px;
   flex: 0 0 auto;
 }
+
+.import-confirmation {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.import-confirmation-notice button {
+  max-width: 100%;
+  height: auto;
+  min-height: 40px;
+  white-space: normal;
+}

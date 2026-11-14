@@ -30,9 +30,9 @@ Criar uma prévia **não altera saldos nem cria lançamentos**. **Revisar regist
 permite corrigir data, descrição, valor absoluto, tipo e categoria. A seleção
 começa desmarcada e exige dados válidos, conta ativa e categoria própria ativa
 do mesmo tipo. Salvar uma correção desmarca o registro para nova conferência.
-Correção e seleção preservam as páginas já carregadas. Não há botão de
-confirmação financeira na interface nesta entrega; a API técnica descrita abaixo
-já permite confirmação explícita. Transferências e estornos
+Correção e seleção preservam as páginas já carregadas. **Conferir confirmação da
+seleção** abre uma consulta atual da seleção, totais, avisos e impacto no saldo e
+nas reservas. Transferências e estornos
 precisam ser conferidos: o sinal do valor sozinho não comprova sua natureza.
 Uma prévia cria um vínculo com a conta, considerado pela proteção existente da
 referência de abertura. Se precisar redefini-la, faça isso antes de guardar o job.
@@ -64,7 +64,7 @@ metadados e linhas normalizadas da prévia são persistidos. Esses dados continu
 sensíveis e são consultados somente pelo proprietário autenticado.
 A interface acima consome as rotas de prévia e revisão. Essas operações não
 criam transações, transferências ou reservas. A confirmação financeira é uma
-operação separada e explícita, disponível na API; sua tela ainda será entregue.
+operação separada e explícita, disponível na tela de confirmação e na API.
 
 Rotas autenticadas, com respostas `no-store`:
 
@@ -188,8 +188,41 @@ usar nova chave em job já confirmado retorna `409`. Repetir o upload original
 não restaura a prévia nem os lançamentos. Nenhum fluxo de estorno, exclusão de
 importados ou segunda confirmação do mesmo job é disponibilizado nesta unidade.
 
-A interface ainda oferece somente revisão e consulta de prévias. A tela de
-confirmação e recuperação da intenção será a próxima unidade da Fase 4.
+### Confirmar pelo navegador e recuperar o resultado
+
+Na prévia, use **Conferir confirmação da seleção**. Confira a conta, o arquivo,
+a data da posição financeira, receitas/despesas, saldo antes/depois, reservas e
+registros selecionados. A lista mostra 50 de cada vez; **Mostrar mais
+selecionados** permite conferir os demais. Avisos por registro, arquivo igual,
+período sobreposto e busca parcial de duplicatas são apresentados nessa consulta.
+Registros futuros conservam a data e só entram no saldo a partir dela.
+
+As três ciências precisam ser marcadas explicitamente: revisão de duplicatas,
+classificação de transferências/estornos e impacto nas reservas. Só então
+**Confirmar importação** fica disponível. Duplo clique é bloqueado. Despesas que
+comprometem reservas mostram o valor descoberto; nenhuma reserva é liberada.
+Após confirmar, o recibo mostra quantidades e posição histórica e o histórico e
+os alertas de reservas são atualizados. **Consultar recibo da importação** abre
+novamente esse resultado, inclusive se a conta tiver sido arquivada.
+
+Se a resposta não puder ser confirmada, **Consultar resultado da confirmação**
+busca o recibo. **Repetir mesma confirmação** usa a mesma chave, versão e corpo,
+sem criar outra intenção. Navegar para outra área mantém essa tentativa e oferece
+**Consultar confirmação CSV** para retornar; não há reenvio automático ao navegar.
+Uma tentativa pendente impede iniciar a confirmação de outra prévia, mas a
+consulta e revisão continuam disponíveis.
+
+Uma versão desatualizada ou tentativa recusada exige consultar o resultado antes
+de **Revisar nova versão**. Essa ação descarta apenas a tentativa recusada local
+e exige marcar novamente as três ciências; não desfaz uma confirmação no servidor.
+Pedidos com resultado desconhecido mantêm a mesma intenção até serem resolvidos.
+Sair da tela ou da conta não cancela uma requisição já enviada.
+
+A tentativa fica somente na memória do React, vinculada ao usuário e à prévia;
+não vai para localStorage/sessionStorage ou logs. Logout, expiração e troca de
+usuário a limpam. Recarregar o navegador também perde esse estado: consulte o
+recibo e o histórico antes de iniciar outra intenção. Não há nova dependência,
+endpoint, migração ou aplicação ao banco pessoal nesta entrega de interface.
 
 ### Conferir possíveis duplicatas
 

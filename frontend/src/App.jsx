@@ -41,6 +41,7 @@ export default function App() {
   const [goalIntent, setGoalIntent] = useState(null)
   const [allocationIntent, setAllocationIntent] = useState(null)
   const [importIntent, setImportIntent] = useState(null)
+  const [importConfirmationIntent, setImportConfirmationIntent] = useState(null)
   const [financialRevision, setFinancialRevision] = useState(0)
   const financialChanged = useCallback(() => setFinancialRevision((value) => value + 1), [])
   const main = useRef(null)
@@ -60,6 +61,7 @@ export default function App() {
         setGoalIntent(null)
         setAllocationIntent(null)
         setImportIntent(null)
+        setImportConfirmationIntent(null)
         setBusy(false)
         setView('home')
         setNotice('Seu acesso mudou em outra aba. Acesse novamente para continuar.')
@@ -75,6 +77,7 @@ export default function App() {
     setGoalIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
     setAllocationIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
     setImportIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
+    setImportConfirmationIntent((previous) => (previous?.ownerId === profile.id ? previous : null))
     setView('accounts')
     setNotice('')
   }, [])
@@ -87,6 +90,7 @@ export default function App() {
     setGoalIntent(null)
     setAllocationIntent(null)
     setImportIntent(null)
+    setImportConfirmationIntent(null)
     setView('access')
     setNotice('Sua sessão terminou. Entre novamente para continuar.')
   }, [])
@@ -111,6 +115,7 @@ export default function App() {
         setGoalIntent(null)
         setAllocationIntent(null)
         setImportIntent(null)
+        setImportConfirmationIntent(null)
         setView('access')
       } else {
         setNotice(errorMessage(error, 'Não foi possível acessar sua conta. Tente novamente.'))
@@ -132,6 +137,7 @@ export default function App() {
       setGoalIntent(null)
       setAllocationIntent(null)
       setImportIntent(null)
+      setImportConfirmationIntent(null)
       setView('home')
       requestAnimationFrame(() => main.current?.focus())
     } catch (error) {
@@ -270,6 +276,15 @@ export default function App() {
                   Importações
                 </Button>
               </nav>
+              {importConfirmationIntent?.ownerId === user.id && view !== 'imports' && (
+                <p role="status" className="notice notice-error import-confirmation-notice">
+                  Há uma confirmação CSV pendente. Consulte o resultado em Importações antes de
+                  iniciar outra tentativa.{' '}
+                  <Button type="button" variant="outline" onClick={() => setView('imports')}>
+                    Consultar confirmação CSV
+                  </Button>
+                </p>
+              )}
               <ReservationAlerts
                 key={user.id}
                 ownerId={user.id}
@@ -287,6 +302,11 @@ export default function App() {
                   onExpired={expired}
                   intent={importIntent?.ownerId === user.id ? importIntent : null}
                   onIntent={setImportIntent}
+                  confirmationIntent={
+                    importConfirmationIntent?.ownerId === user.id ? importConfirmationIntent : null
+                  }
+                  onConfirmationIntent={setImportConfirmationIntent}
+                  onFinancialChange={financialChanged}
                 />
               ) : view === 'goals' ? (
                 <GoalsPanel
