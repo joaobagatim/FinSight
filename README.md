@@ -4,6 +4,38 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 
 ## Desenvolvimento
 
+### Resumo financeiro por período — API
+
+`GET /api/v1/dashboard/summary?date_from=2026-01-01&date_to=2026-01-31`
+consulta receitas, despesas e resultado líquido do usuário autenticado. As duas
+datas são obrigatórias e inclusivas; o intervalo aceita até 366 dias e termina,
+no máximo, no dia atual de São Paulo (`as_of` da resposta). Datas futuras são
+recusadas: esta consulta não é previsão. O resultado do período não é o saldo
+acumulado da conta.
+
+O escopo padrão `active` considera somente contas atualmente ativas. Use
+`scope=all` para incluir arquivadas ou `scope=selected&account_id=<uuid>` (parâmetro
+repetível, até 100 contas próprias distintas) para seleção explícita, inclusive
+arquivadas. Conta de outro usuário e conta inexistente retornam o mesmo `404`.
+Seleção vazia/duplicada, IDs sem `scope=selected` ou período inválido retornam
+`422`. `account_count` é a quantidade de contas no escopo, mesmo sem atividade;
+período anterior à abertura retorna atividade zero para aquela conta.
+
+Somente lançamentos `posted`, não removidos, datados dentro do período e após a
+abertura entram na soma, incluindo os criados por CSV confirmado. Categorias
+arquivadas preservam seu histórico. Saldo de abertura, transferências internas e
+reservas/retiradas de metas não compõem receita/despesa. `income`, `expense` e
+`net` são strings decimais exatas em BRL; `net = income - expense` pode ser
+negativo. Sem atividade, os valores são `"0.00"`. `transaction_count` informa
+quantos lançamentos contribuíram. Todos os totais e contagens são lidos em uma
+única consulta financeira SQL; a API não soma apenas uma página do histórico.
+
+A rota usa autenticação e controles HTTP financeiros existentes (CORS, limites,
+`Cache-Control: no-store`). Não aceita `user_id` para escolher o proprietário.
+Este incremento disponibiliza o contrato de consulta; a tela e os gráficos do
+dashboard serão implementados depois. Não há dependência ou migração nova;
+schema0017 continua necessário, sem atualização automática do banco pessoal.
+
 ### Preparar uma prévia CSV pelo navegador
 
 Entre no FinSight e abra **Importações**. Selecione uma conta ativa, escolha um

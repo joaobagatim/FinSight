@@ -159,6 +159,131 @@ def body(resource, **changes):
     } | changes
 
 
+def test_dashboard_summary_aggregates_owned_posted_period_without_balance_or_transfer_double_count(
+    context, deletion_resources, monkeypatch
+):
+    monkeypatch.setattr("app.services.dashboard.business_date", lambda: date(2026, 2, 1))
+    database, _, _, emails = context
+    first, other = deletion_resources
+    with database.sessions.begin() as session:
+        archived = Account(
+            user_id=first["owner"],
+            name="Archived synthetic",
+            type="checking",
+            opening_balance=Decimal("9000.00"),
+            opening_date=date(2026, 1, 1),
+            is_active=False,
+        )
+        session.add(archived)
+        session.flush()
+        archived_id = archived.id
+        for resource, account, kind, amount, day, status, removed in [
+            (first, first["account"], "income", "100.10", date(2026, 1, 2), "posted", False),
+            (first, first["account"], "expense", "30.01", date(2026, 1, 31), "posted", False),
+            (first, archived_id, "expense", "20.00", date(2026, 1, 15), "posted", False),
+            (first, first["account"], "expense", "999.00", date(2026, 1, 3), "planned", False),
+            (first, first["account"], "income", "888.00", date(2026, 1, 3), "posted", True),
+            (first, first["account"], "income", "777.00", date(2026, 2, 1), "posted", False),
+            (other, other["account"], "income", "666.00", date(2026, 1, 3), "posted", False),
+        ]:
+            session.add(
+                Transaction(
+                    user_id=resource["owner"],
+                    account_id=account,
+                    category_id=resource[kind],
+                    description="Synthetic dashboard activity",
+                    type=kind,
+                    amount=Decimal(amount),
+                    effective_date=day,
+                    status=status,
+                    deleted_at=func.now() if removed else None,
+                )
+            )
+        session.add(
+            Transfer(
+                user_id=first["owner"],
+                from_account_id=first["account"],
+                to_account_id=archived_id,
+                amount=Decimal("100.00"),
+                effective_date=date(2026, 1, 4),
+                status="posted",
+            )
+        )
+        session.get(Category, first["expense"]).is_active = False
+    stack, make = clients(context)
+    with stack:
+        client = make(emails[0])
+        path = "/api/v1/dashboard/summary?date_from=2026-01-02&date_to=2026-01-31"
+        active = client.get(path, headers={"Origin": ORIGIN})
+        assert active.status_code == 200
+        assert active.headers["cache-control"] == "no-store"
+        assert active.headers["access-control-allow-origin"] == ORIGIN
+        assert active.json() == {
+            "date_from": "2026-01-02",
+            "date_to": "2026-01-31",
+            "as_of": "2026-02-01",
+            "scope": "active",
+            "account_ids": None,
+            "account_count": 1,
+            "transaction_count": 2,
+            "currency": "BRL",
+            "income": "100.10",
+            "expense": "30.01",
+            "net": "70.09",
+        }
+        all_accounts = client.get(path + "&scope=all").json()
+        assert all_accounts["account_count"] == 2 and all_accounts["transaction_count"] == 3
+        assert (all_accounts["income"], all_accounts["expense"], all_accounts["net"]) == (
+            "100.10",
+            "50.01",
+            "50.09",
+        )
+        selected = client.get(path + f"&scope=selected&account_id={archived_id}").json()
+        assert selected["account_ids"] == [str(archived_id)]
+        assert selected["transaction_count"] == 1 and selected["net"] == "-20.00"
+        empty = (
+            make(emails[1])
+            .get("/api/v1/dashboard/summary?date_from=2026-01-31&date_to=2026-01-31")
+            .json()
+        )
+        assert empty["transaction_count"] == 0
+        assert (empty["income"], empty["expense"], empty["net"]) == ("0.00", "0.00", "0.00")
+
+
+def test_dashboard_summary_rejects_invalid_period_and_account_scope_without_exposing_other_owner(
+    context, resources, monkeypatch
+):
+    monkeypatch.setattr("app.services.dashboard.business_date", lambda: date(2026, 2, 1))
+    _, _, _, emails = context
+    first, other = resources
+    stack, make = clients(context)
+    with stack:
+        client, anonymous = make(emails[0]), make()
+        path = "/api/v1/dashboard/summary?date_from=2026-01-01&date_to=2026-01-31"
+        assert anonymous.get(path).status_code == 401
+        for query in [
+            "date_from=2026-02-01&date_to=2026-01-01",
+            "date_from=2026-02-02&date_to=2026-02-02",
+            "date_from=2024-01-01&date_to=2025-01-01",
+            "date_from=invalid&date_to=2026-01-31",
+            "date_to=2026-01-31",
+        ]:
+            rejected = client.get("/api/v1/dashboard/summary?" + query)
+            assert rejected.status_code == 422 and rejected.headers["cache-control"] == "no-store"
+        for suffix in [
+            "&scope=selected",
+            f"&account_id={first['account']}",
+            f"&scope=selected&account_id={first['account']}&account_id={first['account']}",
+        ]:
+            assert client.get(path + suffix).status_code == 422
+        foreign = client.get(path + f"&scope=selected&account_id={other['account']}")
+        missing = client.get(path + f"&scope=selected&account_id={uuid4()}")
+        assert foreign.status_code == missing.status_code == 404
+        assert foreign.json() == missing.json() == {"detail": "Account not found"}
+        valid = client.get("/api/v1/dashboard/summary?date_from=2025-02-01&date_to=2026-02-01")
+        assert valid.status_code == 200  # Exactly 366 inclusive days are accepted.
+
+
 def create(client, data, key=None):
     return client.post(
         PATH,
