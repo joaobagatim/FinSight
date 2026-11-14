@@ -71,6 +71,104 @@ async function map(page: Page, format: 'comma' | 'dot', split = false) {
   return form
 }
 
+test('CSV end-to-end imports eight of ten reviewed rows and replay keeps exactly eight transactions', async ({
+  page,
+  request,
+}) => {
+  await page.setViewportSize({ width: 320, height: 950 })
+  const { api, accountId } = await setup(page, request)
+  await page.addStyleTag({ content: 'html{font-size:18px}' })
+  const category = await api.post(base + '/categories', {
+    headers: { Origin: sessionOrigin, 'X-CSRF-Token': await sessionCsrf(api) },
+    data: { name: 'Categoria sintética fluxo completo', type: 'expense' },
+  })
+  expect(category.status()).toBe(201)
+  const categoryId = (await category.json()).id as string
+  await page.getByLabel('Arquivo CSV', { exact: true }).setInputFiles({
+    name: 'synthetic-ten-expenses.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(
+      [
+        'Date;Description;Amount',
+        ...Array.from(
+          { length: 10 },
+          (_, i) => `2026-01-02;Despesa sintética completa ${i + 1};-10.00`,
+        ),
+      ].join('\n'),
+    ),
+  })
+  await page.getByRole('button', { name: 'Analisar arquivo', exact: true }).click()
+  const mapping = await map(page, 'dot')
+  await mapping.getByRole('button', { name: 'Guardar prévia para revisão', exact: true }).click()
+  const preview = page.getByRole('region', { name: 'Consulta da prévia', exact: true })
+  await expect(preview.getByRole('heading', { name: 'Registro 11', exact: true })).toBeVisible()
+  await expect(preview.getByRole('checkbox', { checked: true })).toHaveCount(0)
+  for (let row = 2; row <= 9; row++) {
+    await preview.getByRole('button', { name: `Revisar registro ${row}`, exact: true }).click()
+    await page
+      .getByRole('combobox', { name: 'Categoria do registro', exact: true })
+      .selectOption(categoryId)
+    await page.getByRole('button', { name: 'Salvar correção do registro', exact: true }).click()
+    const selected = preview.getByRole('checkbox', {
+      name: `Selecionar registro ${row}`,
+      exact: true,
+    })
+    await selected.click()
+    await expect(selected).toBeChecked()
+  }
+  await expect(preview.getByRole('checkbox', { checked: true })).toHaveCount(8)
+  expect((await (await api.get(base + '/transactions')).json()).items).toHaveLength(0)
+  await preview
+    .getByRole('button', { name: 'Conferir confirmação da seleção', exact: true })
+    .click()
+  const confirmation = page.getByRole('region', {
+    name: 'Conferir e confirmar importação',
+    exact: true,
+  })
+  await expect(confirmation).toContainText('8 de 10 registro(s) selecionado(s)')
+  const form = confirmation.getByRole('form', { name: 'Confirmar seleção CSV', exact: true })
+  await expect(form.getByRole('checkbox')).toHaveCount(3)
+  for (const checkbox of await form.getByRole('checkbox').all()) await checkbox.check()
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname.endsWith('/confirm'),
+  )
+  await form.getByRole('button', { name: /Confirmar importação de/ }).click()
+  const response = await responsePromise
+  expect(response.status()).toBe(200)
+  const receipt = page.getByRole('region', { name: 'Recibo da importação', exact: true })
+  await expect(receipt).toContainText('Importação concluída: 8 lançamento(s) criado(s).')
+  await expect(receipt).toContainText('2 registro(s) não importado(s), incluindo 0 inválido(s)')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false)
+
+  // The complete import uses the UI. Replay uses the real API to prove the same intent is retained.
+  const sent = response.request()
+  const headers = sent.headers()
+  expect(Boolean(headers['idempotency-key'] && headers['if-match'])).toBe(true)
+  const replay = await api.post(response.url(), {
+    headers: {
+      Origin: sessionOrigin,
+      'X-CSRF-Token': await sessionCsrf(api),
+      'Idempotency-Key': headers['idempotency-key'],
+      'If-Match': headers['if-match'],
+    },
+    data: sent.postDataJSON(),
+  })
+  expect(replay.status()).toBe(200)
+  expect(await replay.json()).toEqual(await response.json())
+  const transactions = (await (await api.get(base + '/transactions')).json()).items as {
+    description: string
+  }[]
+  expect(transactions.map((row) => row.description).sort()).toEqual(
+    Array.from({ length: 8 }, (_, i) => `Despesa sintética completa ${i + 1}`).sort(),
+  )
+  expect(
+    (await (await api.get(`${base}/accounts/${accountId}/balance?as_of=2026-01-31`)).json())
+      .balance,
+  ).toBe('920.00')
+})
+
 test('CSV preview at 320px rejects oversized input and duplicate mapping, then shows exact paginated rows without changing balances', async ({
   page,
   request,
