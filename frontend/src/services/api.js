@@ -713,6 +713,14 @@ export const api = {
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
     }),
+  importDuplicates: (ownerId, jobId) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const result = await send(`/imports/${encodeURIComponent(jobId)}/duplicates`)
+      if (result?.job_id !== jobId || !Array.isArray(result.items)) throw new ApiError(0)
+      return result
+    }),
   importRow: (ownerId, jobId, rowId) =>
     coordinated(async () => {
       const profile = await renewUnlocked()

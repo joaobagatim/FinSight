@@ -35,6 +35,7 @@ from app.models import (
 )
 from app.schemas.import_review import ImportRowEditInput, ImportSelectionInput
 from app.schemas.imports import ImportInput
+from app.services.import_duplicates import ImportDuplicateService
 from app.services.import_review import ImportReviewClosed, ImportReviewService, ImportReviewStale
 from app.services.imports import ImportRejected, ImportService
 from app.services.sessions import AuthenticationDenied, SessionService, SessionUnavailable
@@ -422,3 +423,149 @@ def test_selection_migration_preserves_corrections_and_refuses_to_lose_user_choi
         and after.category_id == fixed.category_id
         and not after.selected
     )
+
+
+def test_duplicate_report_is_owned_read_only_and_matches_preview_reference_and_transactions(
+    context,
+):
+    token, account, identity, rows, categories, source = review_seed(context)
+    database, sessions, _, emails = context
+    duplicates = ImportDuplicateService(sessions)
+    review = ImportReviewService(sessions)
+    original = duplicates.report(token, identity)
+    assert len(original.items) == 2 and original.checked_rows == 2 and original.unchecked_rows == 2
+    assert all(item.reasons == ["same_preview_fingerprint"] for item in original.items)
+    with database.sessions.begin() as session:
+        for row in rows[:2]:
+            session.get(ImportRow, row.id).external_id = "synthetic-current-reference"
+    assert all(
+        "same_preview_external_id" in item.reasons
+        for item in duplicates.report(token, identity).items
+    )
+    # Identical data owned by another user or in another own account must not match.
+    for index in (0, 1):
+        other_token, _, other_source = seed(context, index)
+        ImportService(sessions).create(other_token, uuid4(), ImportInput(**other_source))
+    with database.sessions.begin() as session:
+        session.get(ImportRow, rows[1].id).status = "ignored"
+    assert duplicates.report(token, identity).items == []
+    assert not duplicates.report(token, identity).overlapping_period
+    other_job = ImportService(sessions).create(token, uuid4(), ImportInput(**source))
+    other_rows = ImportService(sessions).rows(token, other_job, limit=50, offset=0).items
+    with database.sessions.begin() as session:
+        session.get(ImportRow, rows[0].id).external_id = "synthetic-ref"
+        reference = session.get(ImportRow, other_rows[0].id)
+        reference.external_id = "synthetic-ref"
+        reference.transaction_date = date(2026, 4, 1)
+        reference.description = "Different reference data must still warn"
+        session.add(
+            Transaction(
+                user_id=reference.user_id,
+                account_id=account,
+                category_id=categories[0],
+                description=" SYNTHETIC PURCHASE ",
+                amount=Decimal("10.20"),
+                type="expense",
+                status="planned",
+                effective_date=date(2026, 1, 2),
+            )
+        )
+        session.add(
+            Transaction(
+                user_id=reference.user_id,
+                account_id=account,
+                category_id=categories[0],
+                import_row_id=reference.id,
+                description=reference.description,
+                amount=reference.amount,
+                type=reference.type,
+                status="planned",
+                effective_date=reference.transaction_date,
+            )
+        )
+    before = review.get(token, identity, rows[0].id)
+    report = duplicates.report(token, identity)
+    assert report.overlapping_period and not report.scan_limited
+    assert len(report.items) == 1
+    assert set(report.items[0].reasons) == {
+        "other_preview_fingerprint",
+        "other_preview_external_id",
+        "transaction_fingerprint",
+        "transaction_external_id",
+    }
+    assert review.get(token, identity, rows[0].id) == before
+    with database.sessions.begin() as session:
+        session.get(ImportJob, other_job).status = "cancelled"
+        session.execute(
+            update(Transaction)
+            .where(Transaction.account_id == account)
+            .values(deleted_at=func.now())
+        )
+    assert duplicates.report(token, identity).items == []
+    with database.sessions.begin() as session:
+        current = session.get(ImportRow, rows[0].id)
+        session.add(
+            Transaction(
+                user_id=current.user_id,
+                account_id=account,
+                category_id=categories[0],
+                import_row_id=current.id,
+                description=current.description,
+                amount=current.amount,
+                type=current.type,
+                status="planned",
+                effective_date=current.transaction_date,
+            )
+        )
+    assert (
+        duplicates.report(token, identity).items == []
+    )  # Its own linked transaction is not a duplicate.
+    stack, make = clients(context)
+    with stack:
+        owner, other, anonymous = make(emails[0]), make(emails[1]), make()
+        path = f"{PATH}/{identity}/duplicates"
+        response = owner.get(path)
+        assert response.status_code == 200 and response.json()["job_id"] == str(identity)
+        assert response.headers["cache-control"] == "no-store"
+        assert other.get(path).status_code == 404 and anonymous.get(path).status_code == 401
+    # Remove this synthetic soft-deleted fixture before the guarded migration teardown.
+    with database.sessions.begin() as session:
+        session.execute(delete(Transaction).where(Transaction.account_id == account))
+
+
+def test_duplicate_report_refreshes_after_correction_and_reports_containing_period_and_limits(
+    context,
+    monkeypatch,
+):
+    token, account, identity, rows, categories, source = review_seed(context)
+    database, sessions, _, _ = context
+    duplicates, review = ImportDuplicateService(sessions), ImportReviewService(sessions)
+    corrected_row = review.edit(
+        token, identity, rows[0].id, ImportRowEditInput(**corrected(categories[0])), rows[0].etag
+    )
+    selected = review.select(
+        token, identity, rows[0].id, ImportSelectionInput(selected=True), corrected_row.etag
+    )
+    assert duplicates.report(token, identity).items == []
+    assert review.get(token, identity, rows[0].id) == selected
+    with database.sessions.begin() as session:
+        for row in session.scalars(select(ImportRow).where(ImportRow.import_job_id == identity)):
+            row.transaction_date = date(2026, 1, 15) if row.status == "pending" else None
+    other = ImportService(sessions).create(token, uuid4(), ImportInput(**source))
+    other_rows = ImportService(sessions).rows(token, other, limit=50, offset=0).items
+    with database.sessions.begin() as session:
+        session.get(ImportRow, other_rows[0].id).transaction_date = date(2026, 1, 2)
+        session.get(ImportRow, other_rows[1].id).transaction_date = date(2026, 1, 31)
+    contained = duplicates.report(token, identity)
+    assert contained.overlapping_period and contained.items == []
+    # Bound the number of historical candidates, and disclose partial coverage.
+    with database.sessions.begin() as session:
+        for other_row in other_rows[:2]:
+            session.get(ImportRow, other_row.id).transaction_date = date(2026, 1, 15)
+    monkeypatch.setattr("app.services.import_duplicates.MAX_CANDIDATES", 1)
+    limited = duplicates.report(token, identity)
+    assert limited.scan_limited and limited.candidate_limit == 1
+    assert review.get(token, identity, rows[0].id).selected
+    assert TransactionService(sessions).balance(
+        token, account, date(2026, 1, 31)
+    ).balance == Decimal("1000.00")
