@@ -11,6 +11,7 @@ from app.api.accounts import router as accounts_router
 from app.api.allocations import router as allocations_router
 from app.api.auth import router as auth_router
 from app.api.categories import router as categories_router
+from app.api.dashboard import router as dashboard_router
 from app.api.error_handlers import registration_validation_error
 from app.api.goals import router as goals_router
 from app.api.health import router as health_router
@@ -42,6 +43,7 @@ from app.services.accounts import (
 )
 from app.services.allocations import AllocationRejected
 from app.services.categories import CategoryConflict, CategoryNotFound, CategoryStale
+from app.services.dashboard import DashboardRejected
 from app.services.goals import GoalConflict, GoalNotFound, GoalStale
 from app.services.import_review import ImportReviewClosed, ImportReviewStale
 from app.services.imports import ImportBusy, ImportConflict, ImportNotFound, ImportRejected
@@ -139,6 +141,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             {"detail": "Reservation rejected; check date, state and available amounts"},
             status_code=422,
+        )
+
+    @application.exception_handler(DashboardRejected)
+    async def dashboard_rejected(_request, _error):
+        return JSONResponse(
+            {"detail": "Dashboard query rejected; check period and account scope"}, status_code=422
         )
 
     @application.exception_handler(ImportNotFound)
@@ -292,4 +300,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(transactions_router)
     application.include_router(transfers_router)
     application.include_router(balance_router)
+    application.include_router(dashboard_router)
     return application

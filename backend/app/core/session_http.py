@@ -55,6 +55,8 @@ def is_financial_path(path: str) -> bool:
         or path.startswith("/api/v1/goals/")
         or path == "/api/v1/reservations"
         or path.startswith("/api/v1/reservations/")
+        or path == "/api/v1/dashboard"
+        or path.startswith("/api/v1/dashboard/")
     )
 
 
