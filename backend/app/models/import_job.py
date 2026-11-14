@@ -1,4 +1,4 @@
-"""Import metadata only; uploading and processing files belong to later services."""
+"""CSV import metadata and retained one-time confirmation receipts."""
 
 import re
 import uuid
@@ -19,6 +19,7 @@ from sqlalchemy import (
     and_,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship, validates
 
 from app.db.base import Base
@@ -38,6 +39,19 @@ def normalize_sha256(value: str) -> str:
 class ImportJob(Base):
     __tablename__ = "import_jobs"
     __table_args__ = (
+        UniqueConstraint("user_id", "confirmation_key", name="uq_import_jobs_confirmation_key"),
+        CheckConstraint(
+            "(confirmation_key IS NULL AND confirmation_hash IS NULL "
+            "AND confirmation_result IS NULL) OR "
+            "(confirmation_key IS NOT NULL AND confirmation_hash IS NOT NULL "
+            "AND confirmation_result IS NOT NULL AND status = 'completed' "
+            "AND completed_at IS NOT NULL AND imported_rows > 0 "
+            "AND confirmation_hash ~ '^[0-9a-f]{64}$' "
+            "AND substring(confirmation_key::text, 15, 1) = '4' "
+            "AND substring(confirmation_key::text, 20, 1) IN ('8', '9', 'a', 'b') "
+            "AND jsonb_typeof(confirmation_result) = 'object')",
+            name="ck_import_jobs_confirmation",
+        ),
         ForeignKeyConstraint(
             ["user_id", "account_id"],
             ["accounts.user_id", "accounts.id"],
@@ -83,6 +97,9 @@ class ImportJob(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmation_key: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    confirmation_hash: Mapped[str | None] = mapped_column(String(64))
+    confirmation_result: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
 
     user: Mapped["User"] = relationship(back_populates="import_jobs", foreign_keys=[user_id])
     account: Mapped["Account"] = relationship(

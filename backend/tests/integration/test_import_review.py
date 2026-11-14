@@ -404,7 +404,7 @@ def test_selection_migration_preserves_corrections_and_refuses_to_lose_user_choi
             command.downgrade(config, "0015_import_creation_requests")
         assert (
             MigrationContext.configure(connection).get_current_revision()
-            == "0016_import_review_selection"
+            == "0017_import_confirmation"
         )
         assert connection.scalar(select(ImportRow.selected).where(ImportRow.id == row_id))
         command.check(config)
