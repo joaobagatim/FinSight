@@ -301,6 +301,40 @@ export const api = {
         return submit()
       }
     }),
+  dashboardSummary: (ownerId, scope, dateFrom, dateTo, accountIds = []) =>
+    coordinated(async () => {
+      const profile = await renewUnlocked()
+      if (profile.id !== ownerId) throw new ApiError(401)
+      const ids = scope === 'selected' ? [...accountIds].sort() : []
+      const query = new URLSearchParams({ scope, date_from: dateFrom, date_to: dateTo })
+      ids.forEach((id) => query.append('account_id', id))
+      const result = await send(`/dashboard/summary?${query}`)
+      if (
+        result?.date_from !== dateFrom ||
+        result.date_to !== dateTo ||
+        result.scope !== scope ||
+        result.currency !== 'BRL' ||
+        typeof result.as_of !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(result.as_of) ||
+        result.as_of < dateTo ||
+        !['account_count', 'transaction_count'].every(
+          (field) => Number.isSafeInteger(result[field]) && result[field] >= 0,
+        ) ||
+        !['income', 'expense'].every(
+          (field) => typeof result[field] === 'string' && /^\d+\.\d{2}$/.test(result[field]),
+        ) ||
+        typeof result.net !== 'string' ||
+        !/^-?\d+\.\d{2}$/.test(result.net) ||
+        (scope === 'selected'
+          ? result.account_count !== ids.length ||
+            JSON.stringify(result.account_ids) !== JSON.stringify(ids)
+          : result.account_ids !== null)
+      )
+        throw new ApiError(0)
+      const cents = (value) => BigInt(value.replace('.', ''))
+      if (cents(result.income) - cents(result.expense) !== cents(result.net)) throw new ApiError(0)
+      return result
+    }),
   balanceHistory: (ownerId, accountId, dateFrom, dateTo) =>
     coordinated(async () => {
       const profile = await renewUnlocked()

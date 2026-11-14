@@ -4,6 +4,29 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 
 ## Desenvolvimento
 
+### Indicadores no dashboard
+
+Após entrar, abra **Dashboard**. A primeira consulta usa o mês atual até hoje em
+São Paulo e as contas atualmente ativas. Os cartões mostram receitas, despesas
+e resultado líquido efetivados; resultado do período não é saldo acumulado.
+Os saldos continuam na área **Saldos**, com sua própria data de posição.
+
+Informe as datas inicial/final (inclusivas, até 366 dias e sem futuro), escolha
+contas ativas, todas incluindo arquivadas ou seleção manual de até 100 contas e
+clique em **Consultar indicadores**. A seleção manual permite carregar outras
+páginas de contas. Atualizar a lista limpa a seleção. O resultado mostra período,
+escopo, contagens, contas selecionadas e referência de São Paulo retornada pela
+API. Ausência de atividade é informada com zeros explícitos.
+
+Alterar filtros oculta os totais anteriores; respostas atrasadas não restauram
+uma consulta de filtros ou usuário anteriores. Sair da tela e voltar consulta
+novamente. Logout, expiração e troca de usuário limpam a área. Os dados ficam
+em memória, sem storage ou logs financeiros. Datas e dinheiro preservam os
+formatos exatos, sem conversão monetária para ponto flutuante. O backend continua
+responsável pela autorização e pelos cálculos. Abertura, transferências internas,
+reservas, planejados e removidos não entram nos cartões. Gráficos e agrupamentos
+por categoria serão adicionados em incrementos posteriores.
+
 ### Resumo financeiro por período — API
 
 `GET /api/v1/dashboard/summary?date_from=2026-01-01&date_to=2026-01-31`
@@ -32,8 +55,8 @@ quantos lançamentos contribuíram. Todos os totais e contagens são lidos em um
 
 A rota usa autenticação e controles HTTP financeiros existentes (CORS, limites,
 `Cache-Control: no-store`). Não aceita `user_id` para escolher o proprietário.
-Este incremento disponibiliza o contrato de consulta; a tela e os gráficos do
-dashboard serão implementados depois. Não há dependência ou migração nova;
+O contrato já pode ser consultado pela tela de indicadores do dashboard;
+gráficos serão implementados depois. Não há dependência ou migração nova;
 schema0017 continua necessário, sem atualização automática do banco pessoal.
 
 ### Preparar uma prévia CSV pelo navegador

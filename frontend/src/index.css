@@ -921,3 +921,53 @@ fieldset {
   min-height: 40px;
   white-space: normal;
 }
+
+.dashboard-panel,
+.dashboard-panel fieldset,
+.dashboard-result {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dashboard-panel button {
+  max-width: 100%;
+  white-space: normal;
+  height: auto;
+  min-height: 44px;
+}
+.dashboard-dates,
+.dashboard-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: 16px;
+}
+.dashboard-selection {
+  margin: 20px 0;
+}
+.dashboard-result {
+  border-top: 1px solid var(--border);
+  margin-top: 28px;
+  padding-top: 24px;
+}
+.dashboard-result h3 {
+  font-size: 22px;
+  margin-bottom: 16px;
+}
+.dashboard-cards {
+  margin: 24px 0;
+}
+.dashboard-card {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.dashboard-card dt {
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.dashboard-card dd {
+  margin: 12px 0 0;
+  font-size: clamp(24px, 3vw, 32px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

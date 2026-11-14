@@ -8,6 +8,7 @@ import TransfersPanel from './components/TransfersPanel.jsx'
 import BalancesPanel from './components/BalancesPanel.jsx'
 import GoalsPanel from './components/GoalsPanel.jsx'
 import ImportsPanel from './components/ImportsPanel.jsx'
+import DashboardPanel from './components/DashboardPanel.jsx'
 import ReservationAlerts from './components/ReservationAlerts.jsx'
 import { api, errorMessage, watchSessionChanges } from '@/services/api'
 import { Badge } from '@/components/ui/badge'
@@ -182,6 +183,7 @@ export default function App() {
             'balances',
             'goals',
             'imports',
+            'dashboard',
           ].includes(view) && (
             <Button type="button" size="sm" onClick={enter} disabled={busy}>
               {busy ? 'Aguarde…' : user ? 'Minhas contas' : 'Acessar FinSight'}
@@ -210,6 +212,7 @@ export default function App() {
           'balances',
           'goals',
           'imports',
+          'dashboard',
         ].includes(view) &&
           user && (
             <section className="workspace">
@@ -219,6 +222,14 @@ export default function App() {
                 Acompanhe suas contas, receitas e despesas com clareza.
               </p>
               <nav className="account-actions workspace-navigation" aria-label="Área financeira">
+                <Button
+                  type="button"
+                  variant={view === 'dashboard' ? 'default' : 'outline'}
+                  aria-current={view === 'dashboard' ? 'page' : undefined}
+                  onClick={() => setView('dashboard')}
+                >
+                  Dashboard
+                </Button>
                 <Button
                   type="button"
                   variant={view === 'accounts' ? 'default' : 'outline'}
@@ -291,7 +302,13 @@ export default function App() {
                 revision={`${view}:${financialRevision}`}
                 onExpired={expired}
               />
-              {view === 'accounts' ? (
+              {view === 'dashboard' ? (
+                <DashboardPanel
+                  key={`${user.id}:${financialRevision}`}
+                  ownerId={user.id}
+                  onExpired={expired}
+                />
+              ) : view === 'accounts' ? (
                 <AccountsPanel key={user.id} ownerId={user.id} onExpired={expired} />
               ) : view === 'categories' ? (
                 <CategoriesPanel key={user.id} ownerId={user.id} onExpired={expired} />

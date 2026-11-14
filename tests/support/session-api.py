@@ -52,6 +52,7 @@ def run():
     # Change only this owned test instance; real configuration/validation stay unchanged.
     # Dedicated limiter tests create separate apps with their own explicit budgets.
     application.state.session_limits.rate = 5000
+    application.state.session_limits.login_rate = 5000
 
     @application.middleware("http")
     async def mark_owned_readiness(request, call_next):
