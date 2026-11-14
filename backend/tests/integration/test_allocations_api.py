@@ -409,7 +409,7 @@ def test_allocation_request_migration_preserves_ledger_and_protects_retry_memory
             command.downgrade(config, "0013_goal_creation_requests")
         assert (
             MigrationContext.configure(connection).get_current_revision()
-            == "0015_import_creation_requests"
+            == "0016_import_review_selection"
         )
         command.check(config)
         connection.execute(delete(AllocationCreationRequest))

@@ -43,6 +43,7 @@ from app.services.accounts import (
 from app.services.allocations import AllocationRejected
 from app.services.categories import CategoryConflict, CategoryNotFound, CategoryStale
 from app.services.goals import GoalConflict, GoalNotFound, GoalStale
+from app.services.import_review import ImportReviewClosed, ImportReviewStale
 from app.services.imports import ImportBusy, ImportConflict, ImportNotFound, ImportRejected
 from app.services.registration import RegistrationUnavailable
 from app.services.sessions import (
@@ -153,6 +154,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.exception_handler(CsvRejected)
     async def csv_rejected(_request, error):
         return JSONResponse({"detail": "CSV rejected", "code": str(error)}, status_code=422)
+
+    @application.exception_handler(ImportReviewStale)
+    async def import_review_stale(_request, _error):
+        return JSONResponse({"detail": "Preview changed; reload before reviewing"}, status_code=412)
+
+    @application.exception_handler(ImportReviewClosed)
+    async def import_review_closed(_request, _error):
+        return JSONResponse({"detail": "Preview record is not editable"}, status_code=409)
 
     @application.exception_handler(ImportConflict)
     async def import_conflict(_request, _error):

@@ -91,6 +91,7 @@ class ImportJobResponse(BaseModel):
     imported_rows: int
     invalid_rows: int
     matching_files: int
+    selected_rows: int = 0
 
 
 class ImportRowResponse(BaseModel):
@@ -103,6 +104,14 @@ class ImportRowResponse(BaseModel):
     external_id: str | None
     status: str
     error_codes: list[str]
+    selected: bool = False
+    category_id: UUID | None = None
+    category_name: str | None = None
+    review_errors: list[str] = Field(default_factory=list)
+    editable: bool = False
+    selection_editable: bool = False
+    selection_eligible: bool = False
+    etag: str = ""
 
     @field_serializer("amount", when_used="json")
     def exact_money(self, value):

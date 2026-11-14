@@ -372,7 +372,7 @@ def test_import_request_migration_preserves_preview_and_owned_retry_memory(conte
             command.downgrade(config, "0014_allocation_requests")
         assert (
             MigrationContext.configure(connection).get_current_revision()
-            == "0015_import_creation_requests"
+            == "0016_import_review_selection"
         )
         command.check(config)
         connection.execute(delete(ImportCreationRequest))
