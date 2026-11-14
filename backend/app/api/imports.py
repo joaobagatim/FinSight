@@ -3,20 +3,23 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import SecretStr
 
 from app.api.dependencies import get_session_service
 from app.api.financial_auth import creation_key, financial_access, financial_mutation
+from app.schemas.import_review import ImportRowEditInput, ImportSelectionInput
 from app.schemas.imports import (
     ImportCreatedResponse,
     ImportInput,
     ImportInspectionResponse,
     ImportJobResponse,
     ImportListResponse,
+    ImportRowResponse,
     ImportRowsResponse,
     ImportSourceInput,
 )
+from app.services.import_review import ImportReviewService
 from app.services.imports import ImportService
 from app.services.sessions import SessionService
 
@@ -77,3 +80,55 @@ def get_preview_rows(
     offset: Annotated[int, Query(ge=0, le=2147483647)] = 0,
 ):
     return service.rows(token, identity, limit=limit, offset=offset)
+
+
+def import_review_service(sessions: Annotated[SessionService, Depends(get_session_service)]):
+    return ImportReviewService(sessions)
+
+
+ReviewETag = Annotated[
+    str, Header(alias="If-Match", min_length=66, max_length=66, pattern=r'^"[0-9a-f]{64}"$')
+]
+
+
+@router.get("/{identity}/rows/{row_id}", response_model=ImportRowResponse)
+def get_review_row(
+    identity: UUID,
+    row_id: UUID,
+    response: Response,
+    token: Annotated[SecretStr, Depends(financial_access)],
+    service: Annotated[ImportReviewService, Depends(import_review_service)],
+):
+    result = service.get(token, identity, row_id)
+    response.headers["ETag"] = result.etag
+    return result
+
+
+@router.patch("/{identity}/rows/{row_id}", response_model=ImportRowResponse)
+def edit_review_row(
+    identity: UUID,
+    row_id: UUID,
+    data: ImportRowEditInput,
+    response: Response,
+    token: Annotated[SecretStr, Depends(financial_mutation)],
+    service: Annotated[ImportReviewService, Depends(import_review_service)],
+    etag: ReviewETag,
+):
+    result = service.edit(token, identity, row_id, data, etag)
+    response.headers["ETag"] = result.etag
+    return result
+
+
+@router.patch("/{identity}/rows/{row_id}/selection", response_model=ImportRowResponse)
+def select_review_row(
+    identity: UUID,
+    row_id: UUID,
+    data: ImportSelectionInput,
+    response: Response,
+    token: Annotated[SecretStr, Depends(financial_mutation)],
+    service: Annotated[ImportReviewService, Depends(import_review_service)],
+    etag: ReviewETag,
+):
+    result = service.select(token, identity, row_id, data, etag)
+    response.headers["ETag"] = result.etag
+    return result

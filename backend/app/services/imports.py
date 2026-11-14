@@ -20,7 +20,6 @@ from app.schemas.imports import (
     ImportInspectionResponse,
     ImportJobResponse,
     ImportListResponse,
-    ImportRowResponse,
     ImportRowsResponse,
     ImportSourceInput,
 )
@@ -97,9 +96,23 @@ def job_query(owner):
         .correlate(ImportJob)
         .scalar_subquery()
     )
-    return select(ImportJob, invalid.label("invalid_rows"), matching.label("matching_files")).where(
-        ImportJob.user_id == owner
+    selected = (
+        select(func.count())
+        .select_from(ImportRow)
+        .where(
+            ImportRow.user_id == owner,
+            ImportRow.import_job_id == ImportJob.id,
+            ImportRow.selected.is_(True),
+        )
+        .correlate(ImportJob)
+        .scalar_subquery()
     )
+    return select(
+        ImportJob,
+        invalid.label("invalid_rows"),
+        matching.label("matching_files"),
+        selected.label("selected_rows"),
+    ).where(ImportJob.user_id == owner)
 
 
 def job_response(row):
@@ -113,6 +126,7 @@ def job_response(row):
         imported_rows=job.imported_rows,
         invalid_rows=row.invalid_rows,
         matching_files=row.matching_files,
+        selected_rows=row.selected_rows,
     )
 
 
@@ -247,6 +261,8 @@ class ImportService:
         return result
 
     def rows(self, token: SecretStr, identity: UUID, *, limit: int, offset: int):
+        from app.services.import_review import review_query, review_response
+
         with self.sessions.authorized_transaction(token) as (session, owner):
             if (
                 session.scalar(
@@ -257,28 +273,14 @@ class ImportService:
                 is None
             ):
                 raise ImportNotFound()
-            rows = session.scalars(
-                select(ImportRow)
-                .where(ImportRow.user_id == owner.user_id, ImportRow.import_job_id == identity)
+            rows = session.execute(
+                review_query(owner.user_id, identity)
                 .order_by(ImportRow.row_number, ImportRow.id)
                 .limit(limit + 1)
                 .offset(offset)
             ).all()
             result = ImportRowsResponse(
-                items=[
-                    ImportRowResponse(
-                        id=row.id,
-                        row_number=row.row_number,
-                        transaction_date=row.transaction_date,
-                        description=row.description,
-                        amount=row.amount,
-                        type=row.type,
-                        external_id=row.external_id,
-                        status=row.status,
-                        error_codes=row.error_message.split(",") if row.error_message else [],
-                    )
-                    for row in rows[:limit]
-                ],
+                items=[review_response(row) for row in rows[:limit]],
                 limit=limit,
                 offset=offset,
                 has_more=len(rows) > limit,

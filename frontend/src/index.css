@@ -896,3 +896,16 @@ fieldset {
   border-radius: 8px;
   padding: 16px;
 }
+
+.import-selection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin: 12px 0;
+}
+.import-selection input {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+}
