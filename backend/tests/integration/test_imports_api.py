@@ -220,8 +220,12 @@ def test_preview_http_is_owned_private_and_never_creates_financial_movements(con
         assert {item["account_id"] for item in other.get(PATH).json()["items"]} == {
             str(other_account)
         }
-        for endpoint in [path + "/confirm", path + "/post"]:
-            assert owner.post(endpoint, json={}, headers=headers(owner)).status_code == 404
+        confirmation_status = owner.post(
+            path + "/confirm", json={}, headers=headers(owner)
+        ).status_code
+        posting_status = owner.post(path + "/post", json={}, headers=headers(owner)).status_code
+        assert confirmation_status == 422
+        assert posting_status == 404
     assert TransactionService(sessions).balance(
         token, account, date(2026, 1, 2)
     ).balance == Decimal("1000.00")
@@ -372,7 +376,7 @@ def test_import_request_migration_preserves_preview_and_owned_retry_memory(conte
             command.downgrade(config, "0014_allocation_requests")
         assert (
             MigrationContext.configure(connection).get_current_revision()
-            == "0016_import_review_selection"
+            == "0017_import_confirmation"
         )
         command.check(config)
         connection.execute(delete(ImportCreationRequest))

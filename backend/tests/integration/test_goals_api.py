@@ -282,7 +282,7 @@ def test_goal_request_migration_preserves_existing_goal_and_cannot_discard_retai
             command.downgrade(config, "0012_transfer_deletion")
         assert (
             MigrationContext.configure(connection).get_current_revision()
-            == "0016_import_review_selection"
+            == "0017_import_confirmation"
         )
         assert (
             connection.execute(

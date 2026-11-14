@@ -17,7 +17,7 @@ CONFIG_PATH = BACKEND_DIR / "alembic.ini"
 
 def test_revision_graph_preserves_prior_revisions_and_has_one_transaction_request_head():
     script = ScriptDirectory.from_config(Config(str(CONFIG_PATH)))
-    assert script.get_heads() == ["0016_import_review_selection"]
+    assert script.get_heads() == ["0017_import_confirmation"]
     assert script.get_bases() == ["0001_phase0"]
     assert script.get_revision("0001_phase0").down_revision is None
     assert script.get_revision("0002_identity").down_revision == "0001_phase0"
@@ -57,7 +57,11 @@ def test_revision_graph_preserves_prior_revisions_and_has_one_transaction_reques
         script.get_revision("0015_import_creation_requests").down_revision
         == "0014_allocation_requests"
     )
-    assert script.get_revision("head").down_revision == "0015_import_creation_requests"
+    assert (
+        script.get_revision("0016_import_review_selection").down_revision
+        == "0015_import_creation_requests"
+    )
+    assert script.get_revision("head").down_revision == "0016_import_review_selection"
 
 
 def test_template_generates_an_importable_revision_outside_the_repository(tmp_path):
@@ -66,7 +70,7 @@ def test_template_generates_an_importable_revision_outside_the_repository(tmp_pa
     config = Config(str(CONFIG_PATH))
     config.set_main_option("script_location", str(scripts))
     revision = command.revision(config, message="synthetic template probe", rev_id="template_probe")
-    assert revision.down_revision == "0016_import_review_selection"
+    assert revision.down_revision == "0017_import_confirmation"
     assert callable(revision.module.upgrade)
     assert callable(revision.module.downgrade)
     assert ScriptDirectory.from_config(config).get_heads() == ["template_probe"]
