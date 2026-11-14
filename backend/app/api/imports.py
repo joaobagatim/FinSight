@@ -8,6 +8,7 @@ from pydantic import SecretStr
 
 from app.api.dependencies import get_session_service
 from app.api.financial_auth import creation_key, financial_access, financial_mutation
+from app.schemas.import_duplicates import DuplicateReport
 from app.schemas.import_review import ImportRowEditInput, ImportSelectionInput
 from app.schemas.imports import (
     ImportCreatedResponse,
@@ -19,6 +20,7 @@ from app.schemas.imports import (
     ImportRowsResponse,
     ImportSourceInput,
 )
+from app.services.import_duplicates import ImportDuplicateService
 from app.services.import_review import ImportReviewService
 from app.services.imports import ImportService
 from app.services.sessions import SessionService
@@ -84,6 +86,15 @@ def get_preview_rows(
 
 def import_review_service(sessions: Annotated[SessionService, Depends(get_session_service)]):
     return ImportReviewService(sessions)
+
+
+@router.get("/{identity}/duplicates", response_model=DuplicateReport)
+def get_duplicate_report(
+    identity: UUID,
+    token: Annotated[SecretStr, Depends(financial_access)],
+    sessions: Annotated[SessionService, Depends(get_session_service)],
+):
+    return ImportDuplicateService(sessions).report(token, identity)
 
 
 ReviewETag = Annotated[
