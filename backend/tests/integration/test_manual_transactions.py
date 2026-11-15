@@ -231,6 +231,35 @@ def test_dashboard_summary_aggregates_owned_posted_period_without_balance_or_tra
             "expense": "30.01",
             "net": "70.09",
         }
+        breakdown_response = client.get(path.replace("/summary?", "/breakdown?"))
+        assert breakdown_response.status_code == 200
+        assert breakdown_response.headers["cache-control"] == "no-store"
+        detail = breakdown_response.json()
+        assert {key: detail[key] for key in active.json()} == active.json()
+        assert len(detail["daily"]) == 30
+        assert detail["daily"][0] == {
+            "date": "2026-01-02",
+            "transaction_count": 1,
+            "income": "100.10",
+            "expense": "0.00",
+            "net": "100.10",
+        }
+        assert detail["daily"][-1]["expense"] == "30.01"
+        assert detail["daily"][13]["date"] == "2026-01-15"
+        assert detail["daily"][13]["transaction_count"] == 0
+        assert detail["expense_categories"] == [
+            {
+                "category_id": str(first["expense"]),
+                "name": "Expense",
+                "amount": "30.01",
+                "transaction_count": 1,
+            }
+        ]
+        assert detail["other_expenses"] == {
+            "category_count": 0,
+            "transaction_count": 0,
+            "amount": "0.00",
+        }
         all_accounts = client.get(path + "&scope=all").json()
         assert all_accounts["account_count"] == 2 and all_accounts["transaction_count"] == 3
         assert (all_accounts["income"], all_accounts["expense"], all_accounts["net"]) == (
@@ -238,9 +267,17 @@ def test_dashboard_summary_aggregates_owned_posted_period_without_balance_or_tra
             "50.01",
             "50.09",
         )
+        all_detail = client.get(path.replace("/summary?", "/breakdown?") + "&scope=all").json()
+        assert all_detail["daily"][13]["expense"] == "20.00"
+        assert all_detail["expense_categories"][0]["amount"] == all_accounts["expense"]
         selected = client.get(path + f"&scope=selected&account_id={archived_id}").json()
         assert selected["account_ids"] == [str(archived_id)]
         assert selected["transaction_count"] == 1 and selected["net"] == "-20.00"
+        selected_detail = client.get(
+            path.replace("/summary?", "/breakdown?") + f"&scope=selected&account_id={archived_id}"
+        ).json()
+        assert selected_detail["account_ids"] == [str(archived_id)]
+        assert selected_detail["expense_categories"][0]["amount"] == "20.00"
         empty = (
             make(emails[1])
             .get("/api/v1/dashboard/summary?date_from=2026-01-31&date_to=2026-01-31")
@@ -248,6 +285,22 @@ def test_dashboard_summary_aggregates_owned_posted_period_without_balance_or_tra
         )
         assert empty["transaction_count"] == 0
         assert (empty["income"], empty["expense"], empty["net"]) == ("0.00", "0.00", "0.00")
+        empty_detail = (
+            make(emails[1])
+            .get("/api/v1/dashboard/breakdown?date_from=2026-01-31&date_to=2026-01-31")
+            .json()
+        )
+        assert empty_detail["daily"] == [
+            {
+                "date": "2026-01-31",
+                "transaction_count": 0,
+                "income": "0.00",
+                "expense": "0.00",
+                "net": "0.00",
+            }
+        ]
+        assert empty_detail["expense_categories"] == []
+        assert empty_detail["expense_category_count"] == 0
 
 
 def test_dashboard_summary_rejects_invalid_period_and_account_scope_without_exposing_other_owner(
@@ -282,6 +335,85 @@ def test_dashboard_summary_rejects_invalid_period_and_account_scope_without_expo
         assert foreign.json() == missing.json() == {"detail": "Account not found"}
         valid = client.get("/api/v1/dashboard/summary?date_from=2025-02-01&date_to=2026-02-01")
         assert valid.status_code == 200  # Exactly 366 inclusive days are accepted.
+        detail_path = path.replace("/summary?", "/breakdown?")
+        assert anonymous.get(detail_path).status_code == 401
+        assert (
+            client.get(detail_path + f"&scope=selected&account_id={other['account']}").status_code
+            == 404
+        )
+        assert (
+            client.get(
+                "/api/v1/dashboard/breakdown?date_from=2026-02-02&date_to=2026-02-02"
+            ).status_code
+            == 422
+        )
+        boundary = client.get("/api/v1/dashboard/breakdown?date_from=2025-02-01&date_to=2026-02-01")
+        assert boundary.status_code == 200 and len(boundary.json()["daily"]) == 366
+
+
+def test_dashboard_breakdown_caps_categories_without_losing_exact_totals_in_one_snapshot(
+    context, resources, monkeypatch
+):
+    monkeypatch.setattr("app.services.dashboard.business_date", lambda: date(2026, 2, 1))
+    database, _, _, emails = context
+    own = resources[0]
+    with database.sessions.begin() as session:
+        amounts = [(own["expense"], Decimal("9999999999999.99"))]
+        for index in range(1, 21):
+            category = Category(
+                user_id=own["owner"], name=f"Chart category {index}", type="expense"
+            )
+            session.add(category)
+            session.flush()
+            amounts.append((category.id, Decimal("9999999999999.99")))
+        for category_id, amount in amounts:
+            session.add(
+                Transaction(
+                    user_id=own["owner"],
+                    account_id=own["account"],
+                    category_id=category_id,
+                    description="Synthetic exact chart",
+                    type="expense",
+                    amount=amount,
+                    effective_date=date(2026, 1, 3),
+                    status="posted",
+                )
+            )
+    statements = []
+
+    def observe(_connection, _cursor, statement, _parameters, _context, _many):
+        if "dashboard_movements AS" in statement:
+            statements.append(statement)
+
+    stack, make = clients(context)
+    with stack:
+        client = make(emails[0])
+        event.listen(database.engine, "before_cursor_execute", observe)
+        try:
+            response = client.get(
+                "/api/v1/dashboard/breakdown?date_from=2026-01-02&date_to=2026-01-03"
+            )
+        finally:
+            event.remove(database.engine, "before_cursor_execute", observe)
+    assert response.status_code == 200
+    assert len(statements) == 1
+    result = response.json()
+    assert result["transaction_count"] == 21 and result["expense_category_count"] == 21
+    assert result["expense"] == "209999999999999.79" and result["net"] == "-209999999999999.79"
+    assert result["category_limit"] == 20
+    assert [item["amount"] for item in result["expense_categories"]] == ["9999999999999.99"] * 20
+    assert [item["category_id"] for item in result["expense_categories"]] == sorted(
+        str(category_id) for category_id, _amount in amounts
+    )[:20]
+    assert result["other_expenses"] == {
+        "category_count": 1,
+        "transaction_count": 1,
+        "amount": "9999999999999.99",
+    }
+    assert result["daily"][0]["expense"] == "0.00"
+    assert result["daily"][1]["expense"] == result["expense"]
+    grouped = sum((Decimal(item["amount"]) for item in result["expense_categories"]), Decimal(0))
+    assert grouped + Decimal(result["other_expenses"]["amount"]) == Decimal(result["expense"])
 
 
 def create(client, data, key=None):
