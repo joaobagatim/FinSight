@@ -24,8 +24,23 @@ novamente. Logout, expiração e troca de usuário limpam a área. Os dados fica
 em memória, sem storage ou logs financeiros. Datas e dinheiro preservam os
 formatos exatos, sem conversão monetária para ponto flutuante. O backend continua
 responsável pela autorização e pelos cálculos. Abertura, transferências internas,
-reservas, planejados e removidos não entram nos cartões. Gráficos e agrupamentos
-por categoria serão adicionados em incrementos posteriores.
+reservas, planejados e removidos não entram nos cartões.
+
+O dashboard também apresenta entradas/saídas por dia e despesas por categoria.
+Cartões, gráficos e tabelas vêm de uma única resposta de `/dashboard/breakdown`;
+o cliente confere datas, contagens e somas exatas antes de exibir a consulta.
+As 20 maiores categorias são detalhadas e o excedente aparece como **Demais
+categorias**, com sua quantidade, sem omitir despesas. Categorias arquivadas
+mantêm o histórico; nomes refletem o cadastro no momento da consulta.
+
+Os gráficos usam escalas relativas ao maior valor de cada gráfico. Rótulos e
+tooltips preservam os valores monetários exatos. **Conferir valores diários** e
+**Conferir despesas por categoria** abrem tabelas acessíveis por teclado, com
+totais e zeros explícitos. Parcelas muito pequenas podem não aparecer na escala
+visual, mas seus valores continuam nas tabelas. Sem atividade, há mensagem
+explícita. Os gráficos são carregados sob demanda; falha nesse carregamento
+preserva os cartões e as tabelas. A série é atividade diária, sem saldo acumulado,
+previsões ou comparações automáticas entre períodos.
 
 ### Resumo financeiro por período — API
 
@@ -56,7 +71,7 @@ quantos lançamentos contribuíram. Todos os totais e contagens são lidos em um
 A rota usa autenticação e controles HTTP financeiros existentes (CORS, limites,
 `Cache-Control: no-store`). Não aceita `user_id` para escolher o proprietário.
 O contrato já pode ser consultado pela tela de indicadores do dashboard;
-gráficos serão implementados depois. Não há dependência ou migração nova;
+os gráficos usam a resposta unificada de breakdown. Não há dependência ou migração nova;
 schema0017 continua necessário, sem atualização automática do banco pessoal.
 
 ### Dados para gráficos do dashboard — API
@@ -87,7 +102,7 @@ também fecha com os totais do período. Dinheiro permanece Decimal/string com
 duas casas: os valores são convertidos para texto no SQL antes do JSON, sem
 passar por ponto flutuante. O namespace mantém os controles de autenticação,
 CORS, limites e `no-store`. Não há dependência, tabela ou migração nova; os
-gráficos visuais ainda serão integrados à tela em uma etapa posterior.
+gráficos visuais já usam esse contrato na área Dashboard.
 
 ### Preparar uma prévia CSV pelo navegador
 
