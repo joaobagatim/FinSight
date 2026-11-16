@@ -4,6 +4,10 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 
 ## Desenvolvimento
 
+O [roteiro integrado do MVP](docs/mvp-walkthrough.md) explica um fluxo completo
+com dados fictícios: cadastro, conta, CSV revisado, dashboard, saldo e reserva de
+meta, com valores esperados e um cenário de navegador reproduzível.
+
 ### Indicadores no dashboard
 
 Após entrar, abra **Dashboard**. A primeira consulta usa o mês atual até hoje em
