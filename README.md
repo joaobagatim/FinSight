@@ -59,6 +59,36 @@ O contrato já pode ser consultado pela tela de indicadores do dashboard;
 gráficos serão implementados depois. Não há dependência ou migração nova;
 schema0017 continua necessário, sem atualização automática do banco pessoal.
 
+### Dados para gráficos do dashboard — API
+
+`GET /api/v1/dashboard/breakdown` aceita os mesmos parâmetros de período e
+escopo do resumo. Devolve todos os campos do resumo junto de `daily`,
+`expense_categories`, `expense_category_count`, `category_limit` e
+`other_expenses`. Totais, série e categorias partem dos mesmos lançamentos
+autorizados em uma única instrução SQL, sob o mesmo snapshot financeiro.
+`/dashboard/summary` preserva seu contrato anterior.
+
+`daily` contém um ponto por data, em ordem crescente, incluindo ambas as
+extremidades (até 366 pontos). Cada ponto informa `income`, `expense`, `net` e
+`transaction_count`. Dias sem movimento têm zeros explícitos. A série apresenta
+atividade diária, não saldo acumulado ou projeção.
+
+`expense_categories` traz até as 20 maiores categorias de despesa, por valor
+decrescente; empates usam o UUID da categoria. Cada item informa `category_id`,
+`name`, `amount` e `transaction_count`. Os nomes refletem o cadastro no momento
+da consulta, inclusive categorias arquivadas com histórico. O campo
+`expense_category_count` informa o total de categorias com despesa no período.
+O excedente está em `other_expenses`, com `amount`, `category_count` e
+`transaction_count`; nenhum valor é descartado. Quando não há excedente, esses
+campos são zero. Um período sem despesas tem lista vazia e excedente zero.
+
+Soma das categorias exibidas mais excedente = despesa do resumo; a série diária
+também fecha com os totais do período. Dinheiro permanece Decimal/string com
+duas casas: os valores são convertidos para texto no SQL antes do JSON, sem
+passar por ponto flutuante. O namespace mantém os controles de autenticação,
+CORS, limites e `no-store`. Não há dependência, tabela ou migração nova; os
+gráficos visuais ainda serão integrados à tela em uma etapa posterior.
+
 ### Preparar uma prévia CSV pelo navegador
 
 Entre no FinSight e abra **Importações**. Selecione uma conta ativa, escolha um
