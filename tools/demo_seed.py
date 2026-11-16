@@ -1,8 +1,11 @@
 """Small synthetic seed through real public registration/auth/financial endpoints."""
 
+import csv
 import json
-from datetime import date, timedelta
+import re
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 
 def seed_demo(local, credentials, opener, request, save):
@@ -10,7 +13,7 @@ def seed_demo(local, credentials, opener, request, save):
     if path.exists():
         plan = json.loads(path.read_text())
     else:
-        today = date.today()
+        today = datetime.now(UTC).astimezone(ZoneInfo("America/Sao_Paulo")).date()
         plan = {
             "anchor": today.isoformat(),
             "opening": (today - timedelta(days=30)).isoformat(),
@@ -38,8 +41,8 @@ def seed_demo(local, credentials, opener, request, save):
         {"X-CSRF-Token": csrf()},
     )
 
-    def create(resource, data, key=None):
-        headers = {"X-CSRF-Token": csrf()}
+    def create(resource, data, key=None, extra_headers=None):
+        headers = {"X-CSRF-Token": csrf(), **(extra_headers or {})}
         if key:
             headers["Idempotency-Key"] = key
         return request(opener, "/api/v1/" + resource, data, headers)
@@ -103,10 +106,78 @@ def seed_demo(local, credentials, opener, request, save):
             },
             plan["keys"][index + 2],
         )
-    summary = {
-        name: len(request(opener, "/api/v1/" + name + "?limit=100")["items"])
-        for name in ("accounts", "categories", "transactions")
-    }
-    request(opener, "/api/v1/auth/logout", {}, {"X-CSRF-Token": csrf()})
+    try:
+        goal_id = seed_goal(plan, path, accounts[1], opener, request, create, save)
+        write_import_example(local, anchor)
+        summary = {
+            name: len(request(opener, "/api/v1/" + name + "?limit=100")["items"])
+            for name in ("accounts", "categories", "transactions", "goals")
+        }
+        summary["allocations"] = len(
+            request(opener, f"/api/v1/goals/{goal_id}/allocations?limit=100")["items"]
+        )
+    finally:
+        request(opener, "/api/v1/auth/logout", {}, {"X-CSRF-Token": csrf()})
     save(local / "seed-result.json", summary)
     return summary
+
+
+def seed_goal(plan, path, account_id, opener, request, create, save):
+    if "goal_seed" not in plan:
+        plan["goal_seed"] = {
+            "key": str(uuid4()),
+            "body": {
+                "name": "Reserva de emergência fictícia",
+                "description": "Meta de exemplo; não representa dados financeiros reais.",
+                "target_amount": "1000.00",
+            },
+        }
+        save(path, plan)
+    goal = plan["goal_seed"]
+    goal_id = create("goals", goal["body"], goal["key"])["id"]
+    if "allocation" not in goal:
+        context, etag = request(
+            opener,
+            f"/api/v1/goals/{goal_id}/allocation-context?account_id={account_id}",
+            with_etag=True,
+        )
+        if not isinstance(etag, str) or not re.fullmatch(r'"[0-9a-f]{64}"', etag):
+            raise RuntimeError("Missing demo reservation context; refusing write")
+        goal["allocation"] = {
+            "key": str(uuid4()),
+            "etag": etag,
+            "body": {
+                "account_id": account_id,
+                "kind": "reserve",
+                "amount": "500.00",
+                "allocation_date": context["funding"]["as_of"],
+                "notes": "Reserva fictícia de demonstração.",
+            },
+        }
+        save(path, plan)  # Exact date/body/key/ETag survive a lost response or a later day.
+    allocation = goal["allocation"]
+    if "id" not in allocation:
+        result = create(
+            f"goals/{goal_id}/allocations",
+            allocation["body"],
+            allocation["key"],
+            {"If-Match": allocation["etag"]},
+        )
+        allocation["id"] = result["id"]
+        save(path, plan)  # Completed reservations are not restored after a user's withdrawal.
+    return goal_id
+
+
+def write_import_example(local, anchor):
+    path = local / "import-example.csv"
+    try:
+        stream = path.open("x", encoding="utf-8", newline="")
+    except FileExistsError:
+        return  # Preserve any edits; never replace the user's example.
+    with stream:
+        writer = csv.writer(stream, delimiter=";", lineterminator="\n")
+        writer.writerow(["Date", "Description", "Amount"])
+        writer.writerow(
+            [(anchor - timedelta(days=2)).isoformat(), "Entrada CSV fictícia", "250.00"]
+        )
+        writer.writerow([(anchor - timedelta(days=1)).isoformat(), "Saída CSV fictícia", "-50.00"])

@@ -262,7 +262,7 @@ def client():
     )
 
 
-def request(opener, path, data=None, headers=None):
+def request(opener, path, data=None, headers=None, *, with_etag=False):
     req = urllib.request.Request(
         API + path,
         data=None if data is None else json.dumps(data).encode(),
@@ -271,7 +271,8 @@ def request(opener, path, data=None, headers=None):
     try:
         with opener.open(req, timeout=10) as response:
             body = response.read()
-            return json.loads(body) if body else None
+            result = json.loads(body) if body else None
+            return (result, response.headers.get("ETag")) if with_etag else result
     except urllib.error.HTTPError as error:
         raise RuntimeError(f"Demo API request failed: HTTP {error.code}, {path}") from None
 
@@ -282,11 +283,16 @@ def identity():
 
 
 def seed():
-    verify_resources(running=True)
-    identity()
-    from demo_seed import seed_demo
+    descriptor = os.open(LOCAL / "seed.lock", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(descriptor)
+    try:
+        verify_resources(running=True)
+        identity()
+        from demo_seed import seed_demo
 
-    return seed_demo(LOCAL, config(), client(), request, save)
+        return seed_demo(LOCAL, config(), client(), request, save)
+    finally:
+        (LOCAL / "seed.lock").unlink()
 
 
 def serve_api():

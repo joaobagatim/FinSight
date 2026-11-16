@@ -36,6 +36,18 @@ test('isolated demo shows synthetic finances through normal login', async ({ pag
   await expect(page.getByText('Carregando metas…', { exact: true })).not.toBeVisible()
   await expect(page.getByRole('alert')).toHaveCount(0)
 
+  const goals = page.getByRole('list', { name: 'Metas cadastradas', exact: true })
+  await expect(goals).toContainText('Reserva de emergência fictícia')
+  await goals.getByRole('button', { name: 'Reservas e progresso', exact: true }).click()
+  await expect(page.locator('.funding-result')).toContainText('Progresso: 50,00%')
+  await expect(page.locator('.funding-result')).toContainText('Reservado na meta: R$ 500,00')
+  await page
+    .getByRole('combobox', { name: 'Conta da reserva', exact: true })
+    .selectOption({ label: 'Reserva fictícia' })
+  const allocation = page.getByRole('form', { name: 'Reservar ou retirar valor', exact: true })
+  await expect(allocation).toContainText('Saldo bancário: R$ 2.850,00')
+  await expect(allocation).toContainText('Saldo livre: R$ 2.350,00')
+
   await page.getByRole('button', { name: 'Importações', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Importações de CSV', exact: true })).toBeVisible()
   await expect(page.getByText('Carregando histórico…', { exact: true })).not.toBeVisible()
