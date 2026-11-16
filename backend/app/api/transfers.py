@@ -15,6 +15,7 @@ from app.schemas.transfers import (
     TransferListResponse,
     TransferPostInput,
     TransferResponse,
+    TransferUpdateInput,
 )
 from app.services.sessions import SessionService
 from app.services.transfers import TransferService, transfer_etag
@@ -51,6 +52,22 @@ def get_transfer(
     return result
 
 
+@router.patch("/{transfer_id}", response_model=TransferResponse)
+def update_transfer(
+    transfer_id: UUID,
+    data: TransferUpdateInput,
+    response: Response,
+    token: Annotated[SecretStr, Depends(financial_mutation)],
+    service: Annotated[TransferService, Depends(transfer_service)],
+    etag: Annotated[
+        str, Header(alias="If-Match", min_length=66, max_length=66, pattern=r'^"[0-9a-f]{64}"$')
+    ],
+):
+    result = service.update(token, transfer_id, data, etag)
+    response.headers["ETag"] = transfer_etag(result)
+    return result
+
+
 @router.post("/{transfer_id}/post", response_model=TransferResponse)
 def post_transfer(
     transfer_id: UUID,
@@ -65,6 +82,20 @@ def post_transfer(
     result = service.post(token, transfer_id, etag)
     response.headers["ETag"] = transfer_etag(result)
     return result
+
+
+@router.delete("/{transfer_id}", status_code=204)
+def delete_transfer(
+    transfer_id: UUID,
+    data: TransferPostInput,
+    token: Annotated[SecretStr, Depends(financial_mutation)],
+    service: Annotated[TransferService, Depends(transfer_service)],
+    etag: Annotated[
+        str, Header(alias="If-Match", min_length=66, max_length=66, pattern=r'^"[0-9a-f]{64}"$')
+    ],
+):
+    service.delete(token, transfer_id, etag)
+    return Response(status_code=204)
 
 
 @router.get("", response_model=TransferListResponse)

@@ -33,7 +33,7 @@ from app.models import (
     User,
 )
 from app.schemas.transactions import TransactionInput, TransactionUpdateInput
-from app.schemas.transfers import TransferInput
+from app.schemas.transfers import TransferInput, TransferUpdateInput
 from app.services.sessions import AuthenticationDenied, SessionService, SessionUnavailable
 from app.services.transactions import (
     TransactionRejected,
@@ -42,7 +42,13 @@ from app.services.transactions import (
     TransactionStale,
     transaction_etag,
 )
-from app.services.transfers import TransferRejected, TransferService, TransferStale, transfer_etag
+from app.services.transfers import (
+    TransferRejected,
+    TransferRemoved,
+    TransferService,
+    TransferStale,
+    transfer_etag,
+)
 
 pytestmark = pytest.mark.postgres
 PASSWORD = "synthetic transaction password"
@@ -151,6 +157,263 @@ def body(resource, **changes):
         "status": "posted",
         "effective_date": "2026-01-02",
     } | changes
+
+
+def test_dashboard_summary_aggregates_owned_posted_period_without_balance_or_transfer_double_count(
+    context, deletion_resources, monkeypatch
+):
+    monkeypatch.setattr("app.services.dashboard.business_date", lambda: date(2026, 2, 1))
+    database, _, _, emails = context
+    first, other = deletion_resources
+    with database.sessions.begin() as session:
+        archived = Account(
+            user_id=first["owner"],
+            name="Archived synthetic",
+            type="checking",
+            opening_balance=Decimal("9000.00"),
+            opening_date=date(2026, 1, 1),
+            is_active=False,
+        )
+        session.add(archived)
+        session.flush()
+        archived_id = archived.id
+        for resource, account, kind, amount, day, status, removed in [
+            (first, first["account"], "income", "100.10", date(2026, 1, 2), "posted", False),
+            (first, first["account"], "expense", "30.01", date(2026, 1, 31), "posted", False),
+            (first, archived_id, "expense", "20.00", date(2026, 1, 15), "posted", False),
+            (first, first["account"], "expense", "999.00", date(2026, 1, 3), "planned", False),
+            (first, first["account"], "income", "888.00", date(2026, 1, 3), "posted", True),
+            (first, first["account"], "income", "777.00", date(2026, 2, 1), "posted", False),
+            (other, other["account"], "income", "666.00", date(2026, 1, 3), "posted", False),
+        ]:
+            session.add(
+                Transaction(
+                    user_id=resource["owner"],
+                    account_id=account,
+                    category_id=resource[kind],
+                    description="Synthetic dashboard activity",
+                    type=kind,
+                    amount=Decimal(amount),
+                    effective_date=day,
+                    status=status,
+                    deleted_at=func.now() if removed else None,
+                )
+            )
+        session.add(
+            Transfer(
+                user_id=first["owner"],
+                from_account_id=first["account"],
+                to_account_id=archived_id,
+                amount=Decimal("100.00"),
+                effective_date=date(2026, 1, 4),
+                status="posted",
+            )
+        )
+        session.get(Category, first["expense"]).is_active = False
+    stack, make = clients(context)
+    with stack:
+        client = make(emails[0])
+        path = "/api/v1/dashboard/summary?date_from=2026-01-02&date_to=2026-01-31"
+        active = client.get(path, headers={"Origin": ORIGIN})
+        assert active.status_code == 200
+        assert active.headers["cache-control"] == "no-store"
+        assert active.headers["access-control-allow-origin"] == ORIGIN
+        assert active.json() == {
+            "date_from": "2026-01-02",
+            "date_to": "2026-01-31",
+            "as_of": "2026-02-01",
+            "scope": "active",
+            "account_ids": None,
+            "account_count": 1,
+            "transaction_count": 2,
+            "currency": "BRL",
+            "income": "100.10",
+            "expense": "30.01",
+            "net": "70.09",
+        }
+        breakdown_response = client.get(path.replace("/summary?", "/breakdown?"))
+        assert breakdown_response.status_code == 200
+        assert breakdown_response.headers["cache-control"] == "no-store"
+        detail = breakdown_response.json()
+        assert {key: detail[key] for key in active.json()} == active.json()
+        assert len(detail["daily"]) == 30
+        assert detail["daily"][0] == {
+            "date": "2026-01-02",
+            "transaction_count": 1,
+            "income": "100.10",
+            "expense": "0.00",
+            "net": "100.10",
+        }
+        assert detail["daily"][-1]["expense"] == "30.01"
+        assert detail["daily"][13]["date"] == "2026-01-15"
+        assert detail["daily"][13]["transaction_count"] == 0
+        assert detail["expense_categories"] == [
+            {
+                "category_id": str(first["expense"]),
+                "name": "Expense",
+                "amount": "30.01",
+                "transaction_count": 1,
+            }
+        ]
+        assert detail["other_expenses"] == {
+            "category_count": 0,
+            "transaction_count": 0,
+            "amount": "0.00",
+        }
+        all_accounts = client.get(path + "&scope=all").json()
+        assert all_accounts["account_count"] == 2 and all_accounts["transaction_count"] == 3
+        assert (all_accounts["income"], all_accounts["expense"], all_accounts["net"]) == (
+            "100.10",
+            "50.01",
+            "50.09",
+        )
+        all_detail = client.get(path.replace("/summary?", "/breakdown?") + "&scope=all").json()
+        assert all_detail["daily"][13]["expense"] == "20.00"
+        assert all_detail["expense_categories"][0]["amount"] == all_accounts["expense"]
+        selected = client.get(path + f"&scope=selected&account_id={archived_id}").json()
+        assert selected["account_ids"] == [str(archived_id)]
+        assert selected["transaction_count"] == 1 and selected["net"] == "-20.00"
+        selected_detail = client.get(
+            path.replace("/summary?", "/breakdown?") + f"&scope=selected&account_id={archived_id}"
+        ).json()
+        assert selected_detail["account_ids"] == [str(archived_id)]
+        assert selected_detail["expense_categories"][0]["amount"] == "20.00"
+        empty = (
+            make(emails[1])
+            .get("/api/v1/dashboard/summary?date_from=2026-01-31&date_to=2026-01-31")
+            .json()
+        )
+        assert empty["transaction_count"] == 0
+        assert (empty["income"], empty["expense"], empty["net"]) == ("0.00", "0.00", "0.00")
+        empty_detail = (
+            make(emails[1])
+            .get("/api/v1/dashboard/breakdown?date_from=2026-01-31&date_to=2026-01-31")
+            .json()
+        )
+        assert empty_detail["daily"] == [
+            {
+                "date": "2026-01-31",
+                "transaction_count": 0,
+                "income": "0.00",
+                "expense": "0.00",
+                "net": "0.00",
+            }
+        ]
+        assert empty_detail["expense_categories"] == []
+        assert empty_detail["expense_category_count"] == 0
+
+
+def test_dashboard_summary_rejects_invalid_period_and_account_scope_without_exposing_other_owner(
+    context, resources, monkeypatch
+):
+    monkeypatch.setattr("app.services.dashboard.business_date", lambda: date(2026, 2, 1))
+    _, _, _, emails = context
+    first, other = resources
+    stack, make = clients(context)
+    with stack:
+        client, anonymous = make(emails[0]), make()
+        path = "/api/v1/dashboard/summary?date_from=2026-01-01&date_to=2026-01-31"
+        assert anonymous.get(path).status_code == 401
+        for query in [
+            "date_from=2026-02-01&date_to=2026-01-01",
+            "date_from=2026-02-02&date_to=2026-02-02",
+            "date_from=2024-01-01&date_to=2025-01-01",
+            "date_from=invalid&date_to=2026-01-31",
+            "date_to=2026-01-31",
+        ]:
+            rejected = client.get("/api/v1/dashboard/summary?" + query)
+            assert rejected.status_code == 422 and rejected.headers["cache-control"] == "no-store"
+        for suffix in [
+            "&scope=selected",
+            f"&account_id={first['account']}",
+            f"&scope=selected&account_id={first['account']}&account_id={first['account']}",
+        ]:
+            assert client.get(path + suffix).status_code == 422
+        foreign = client.get(path + f"&scope=selected&account_id={other['account']}")
+        missing = client.get(path + f"&scope=selected&account_id={uuid4()}")
+        assert foreign.status_code == missing.status_code == 404
+        assert foreign.json() == missing.json() == {"detail": "Account not found"}
+        valid = client.get("/api/v1/dashboard/summary?date_from=2025-02-01&date_to=2026-02-01")
+        assert valid.status_code == 200  # Exactly 366 inclusive days are accepted.
+        detail_path = path.replace("/summary?", "/breakdown?")
+        assert anonymous.get(detail_path).status_code == 401
+        assert (
+            client.get(detail_path + f"&scope=selected&account_id={other['account']}").status_code
+            == 404
+        )
+        assert (
+            client.get(
+                "/api/v1/dashboard/breakdown?date_from=2026-02-02&date_to=2026-02-02"
+            ).status_code
+            == 422
+        )
+        boundary = client.get("/api/v1/dashboard/breakdown?date_from=2025-02-01&date_to=2026-02-01")
+        assert boundary.status_code == 200 and len(boundary.json()["daily"]) == 366
+
+
+def test_dashboard_breakdown_caps_categories_without_losing_exact_totals_in_one_snapshot(
+    context, resources, monkeypatch
+):
+    monkeypatch.setattr("app.services.dashboard.business_date", lambda: date(2026, 2, 1))
+    database, _, _, emails = context
+    own = resources[0]
+    with database.sessions.begin() as session:
+        amounts = [(own["expense"], Decimal("9999999999999.99"))]
+        for index in range(1, 21):
+            category = Category(
+                user_id=own["owner"], name=f"Chart category {index}", type="expense"
+            )
+            session.add(category)
+            session.flush()
+            amounts.append((category.id, Decimal("9999999999999.99")))
+        for category_id, amount in amounts:
+            session.add(
+                Transaction(
+                    user_id=own["owner"],
+                    account_id=own["account"],
+                    category_id=category_id,
+                    description="Synthetic exact chart",
+                    type="expense",
+                    amount=amount,
+                    effective_date=date(2026, 1, 3),
+                    status="posted",
+                )
+            )
+    statements = []
+
+    def observe(_connection, _cursor, statement, _parameters, _context, _many):
+        if "dashboard_movements AS" in statement:
+            statements.append(statement)
+
+    stack, make = clients(context)
+    with stack:
+        client = make(emails[0])
+        event.listen(database.engine, "before_cursor_execute", observe)
+        try:
+            response = client.get(
+                "/api/v1/dashboard/breakdown?date_from=2026-01-02&date_to=2026-01-03"
+            )
+        finally:
+            event.remove(database.engine, "before_cursor_execute", observe)
+    assert response.status_code == 200
+    assert len(statements) == 1
+    result = response.json()
+    assert result["transaction_count"] == 21 and result["expense_category_count"] == 21
+    assert result["expense"] == "209999999999999.79" and result["net"] == "-209999999999999.79"
+    assert result["category_limit"] == 20
+    assert [item["amount"] for item in result["expense_categories"]] == ["9999999999999.99"] * 20
+    assert [item["category_id"] for item in result["expense_categories"]] == sorted(
+        str(category_id) for category_id, _amount in amounts
+    )[:20]
+    assert result["other_expenses"] == {
+        "category_count": 1,
+        "transaction_count": 1,
+        "amount": "9999999999999.99",
+    }
+    assert result["daily"][0]["expense"] == "0.00"
+    assert result["daily"][1]["expense"] == result["expense"]
+    grouped = sum((Decimal(item["amount"]) for item in result["expense_categories"]), Decimal(0))
+    assert grouped + Decimal(result["other_expenses"]["amount"]) == Decimal(result["expense"])
 
 
 def create(client, data, key=None):
@@ -1517,6 +1780,469 @@ def test_transfer_posting_concurrency_rollback_revocation_and_archived_replay(
     sessions.revoke_by_access(token)
     with pytest.raises(AuthenticationDenied):
         service.post(token, second_id, transfer_etag(second))
+
+
+@pytest.fixture
+def transfer_deletion_resources(context, transfer_resources):
+    yield transfer_resources
+    database = context[0]
+    assert database.engine.url.database.startswith("finsight_test_")
+    # Only the synthetic fixture is restored, so its guarded downgrade can clean up.
+    with database.sessions.begin() as session:
+        session.execute(
+            update(Transfer)
+            .where(Transfer.user_id.in_([item["owner"] for item in transfer_resources]))
+            .values(deleted_at=None)
+        )
+
+
+def test_transfer_deletion_http_preserves_identity_and_removes_both_legs_from_all_balances(
+    context, transfer_deletion_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_deletion_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service, balances = TransferService(sessions), TransactionService(sessions)
+    key, original = uuid4(), TransferInput(**transfer_body(own))
+    transfer_id = service.create(token, key, original)
+    planned_id = service.create(
+        token, uuid4(), TransferInput(**transfer_body(own, status="planned", amount="200.00"))
+    )
+    projection = dict(
+        base_date=date(2026, 1, 3),
+        target_date=date(2026, 1, 5),
+        overdue_policy="include",
+        scope="selected",
+        account_ids=[own["account"]],
+    )
+    assert balances.projected_balance(token, **projection).projected_balance == Decimal("300.00")
+    stack, make = clients(context)
+    with stack:
+        client, other = make(emails[0]), make(emails[1])
+        path = f"/api/v1/transfers/{transfer_id}"
+        headers = {
+            "Origin": ORIGIN,
+            "X-CSRF-Token": client.cookies.get("__Host-finsight-csrf"),
+            "If-Match": client.get(path).headers["etag"],
+        }
+        assert (
+            client.request("DELETE", path, json={}, headers={"Origin": ORIGIN}).status_code == 403
+        )
+        assert (
+            client.request(
+                "DELETE",
+                path,
+                json={},
+                headers={k: v for k, v in headers.items() if k != "If-Match"},
+            ).status_code
+            == 422
+        )
+        assert (
+            client.request("DELETE", path, json={"status": "posted"}, headers=headers).status_code
+            == 422
+        )
+        assert (
+            client.request(
+                "DELETE", path, content="{}", headers=headers | {"Content-Type": "text/plain"}
+            ).status_code
+            == 415
+        )
+        assert (
+            client.request(
+                "DELETE",
+                path,
+                content='"' + "x" * 17000 + '"',
+                headers=headers | {"Content-Type": "application/json"},
+            ).status_code
+            == 413
+        )
+        foreign = headers | {"X-CSRF-Token": other.cookies.get("__Host-finsight-csrf")}
+        assert other.request("DELETE", path, json={}, headers=foreign).status_code == 404
+        assert (
+            client.request(
+                "DELETE", path, json={}, headers=headers | {"If-Match": '"' + "0" * 64 + '"'}
+            ).status_code
+            == 412
+        )
+        assert (
+            client.options(
+                path,
+                headers={
+                    "Origin": ORIGIN,
+                    "Access-Control-Request-Method": "DELETE",
+                    "Access-Control-Request-Headers": "if-match,x-csrf-token,content-type",
+                },
+            ).status_code
+            == 200
+        )
+        # Deletion remains available for retained history in an archived account.
+        with database.sessions.begin() as session:
+            session.get(Account, own["target"]).is_active = False
+        removed = client.request("DELETE", path, json={}, headers=headers)
+        assert removed.status_code == 204 and removed.content == b""
+        assert removed.headers["cache-control"] == "no-store"
+        assert client.request("DELETE", path, json={}, headers=headers).status_code == 204
+        assert client.get(path).status_code == 410 and other.get(path).status_code == 404
+        assert client.patch(path, json={"amount": "1.00"}, headers=headers).status_code == 410
+        assert client.post(path + "/post", json={}, headers=headers).status_code == 410
+        assert [item["id"] for item in client.get("/api/v1/transfers").json()["items"]] == [
+            str(planned_id)
+        ]
+        for account in (own["account"], own["target"]):
+            assert balances.balance(token, account, date(2026, 1, 5)).balance == Decimal("1000.00")
+            points = balances.balance_history(
+                token, account, date_from=date(2026, 1, 3), date_to=date(2026, 1, 5)
+            ).points
+            assert all(point.balance == Decimal("1000.00") for point in points)
+        assert balances.consolidated_balance(
+            token, as_of=date(2026, 1, 5), scope="all", account_ids=None
+        ).balance == Decimal("2000.00")
+        assert balances.projected_balance(token, **projection).projected_balance == Decimal(
+            "800.00"
+        )
+        service.delete(token, planned_id, transfer_etag(service.get(token, planned_id)))
+        assert balances.projected_balance(token, **projection).projected_balance == Decimal(
+            "1000.00"
+        )
+        with pytest.raises(TransferRemoved):
+            service.create(token, key, original)
+        assert (
+            client.post(
+                "/api/v1/transfers",
+                json=original.model_dump(mode="json"),
+                headers=headers | {"Idempotency-Key": str(key)},
+            ).status_code
+            == 410
+        )
+        with database.sessions() as session:
+            row = session.get(Transfer, transfer_id)
+            assert row.deleted_at is not None and row.amount == Decimal("500.00")
+            assert (
+                session.get(TransferCreationRequest, (own["owner"], key)).transfer_id == transfer_id
+            )
+
+
+def test_transfer_deletion_races_rollback_and_revocation_do_not_revive_money(
+    context, transfer_deletion_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_deletion_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransferService(sessions)
+    for status in ("planned", "posted"):
+        transfer_id = service.create(
+            token, uuid4(), TransferInput(**transfer_body(own, status=status))
+        )
+        snapshot = service.get(token, transfer_id)
+        etag = transfer_etag(snapshot)
+
+        def fail(_session):
+            raise SQLAlchemyError("synthetic transfer deletion failure")
+
+        event.listen(database.sessions.class_, "before_commit", fail)
+        try:
+            with pytest.raises(SessionUnavailable):
+                service.delete(token, transfer_id, etag)
+        finally:
+            event.remove(database.sessions.class_, "before_commit", fail)
+        assert service.get(token, transfer_id) == snapshot
+        barrier = Barrier(2)
+
+        def remove(barrier=barrier, transfer_id=transfer_id, etag=etag):
+            barrier.wait(timeout=10)
+            try:
+                service.delete(token, transfer_id, etag)
+                return "removed"
+            except TransferStale:
+                return "stale"
+
+        def change(barrier=barrier, transfer_id=transfer_id, etag=etag, status=status):
+            barrier.wait(timeout=10)
+            try:
+                if status == "planned":
+                    service.post(token, transfer_id, etag)
+                else:
+                    service.update(token, transfer_id, TransferUpdateInput(amount="200.00"), etag)
+                return "changed"
+            except TransferRemoved:
+                return "removed"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(remove), executor.submit(change)]
+            outcomes = [future.result(timeout=20) for future in futures]
+        assert outcomes in (["removed", "removed"], ["stale", "changed"])
+        if outcomes[0] == "stale":
+            service.delete(token, transfer_id, transfer_etag(service.get(token, transfer_id)))
+        service.delete(token, transfer_id, etag)
+        with pytest.raises(TransferRemoved):
+            service.get(token, transfer_id)
+    sessions.revoke_by_access(token)
+    with pytest.raises(AuthenticationDenied):
+        service.delete(token, transfer_id, etag)
+
+
+def test_transfer_edit_http_is_conditional_owned_and_updates_one_atomic_transfer(
+    context, transfer_resources
+):
+    database, sessions, _, emails = context
+    own, foreign = transfer_resources
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service, balances = TransferService(sessions), TransactionService(sessions)
+    key, original = uuid4(), TransferInput(**transfer_body(own))
+    transfer_id = service.create(token, key, original)
+    stack, make = clients(context)
+    with stack:
+        client, other, anonymous = make(emails[0]), make(emails[1]), make()
+        path = f"/api/v1/transfers/{transfer_id}"
+        before = client.get(path)
+        headers = {
+            "Origin": ORIGIN,
+            "X-CSRF-Token": client.cookies.get("__Host-finsight-csrf"),
+            "If-Match": before.headers["etag"],
+        }
+        assert anonymous.patch(path, json={"amount": "250.10"}).status_code in (401, 403)
+        assert client.patch(path, json={"amount": "250.10"}).status_code == 403
+        assert (
+            client.patch(
+                path,
+                json={"amount": "250.10"},
+                headers={key: value for key, value in headers.items() if key != "If-Match"},
+            ).status_code
+            == 422
+        )
+        other_headers = {**headers, "X-CSRF-Token": other.cookies.get("__Host-finsight-csrf")}
+        assert (
+            other.patch(path, json={"amount": "250.10"}, headers=other_headers).status_code == 404
+        )
+        for changes in (
+            {"from_account_id": str(foreign["account"])},
+            {"to_account_id": str(own["account"])},
+            {"effective_date": "2026-01-03"},
+            {"status": "planned"},
+            {"amount": 1.2},
+            {},
+        ):
+            assert client.patch(path, json=changes, headers=headers).status_code == 422
+        updated = client.patch(
+            path, json={"amount": "250.10", "description": "Updated transfer"}, headers=headers
+        )
+        assert updated.status_code == 200 and updated.json()["id"] == str(transfer_id)
+        assert updated.json()["status"] == "posted" and updated.json()["amount"] == "250.10"
+        assert updated.headers["etag"] != headers["If-Match"]
+        assert client.patch(path, json={"amount": "300.00"}, headers=headers).status_code == 412
+        assert balances.balance(token, own["account"], date(2026, 1, 4)).balance == Decimal(
+            "749.90"
+        )
+        assert balances.balance(token, own["target"], date(2026, 1, 4)).balance == Decimal(
+            "1250.10"
+        )
+        # Switch both sides and date together; old legs disappear in the same row update.
+        switched = client.patch(
+            path,
+            json={
+                "from_account_id": str(own["target"]),
+                "to_account_id": str(own["account"]),
+                "effective_date": "2026-01-05",
+                "description": None,
+            },
+            headers={**headers, "If-Match": updated.headers["etag"]},
+        )
+        assert switched.status_code == 200 and switched.json()["description"] is None
+        assert balances.balance(token, own["account"], date(2026, 1, 4)).balance == Decimal(
+            "1000.00"
+        )
+        assert balances.balance(token, own["account"], date(2026, 1, 5)).balance == Decimal(
+            "1250.10"
+        )
+        assert balances.balance(token, own["target"], date(2026, 1, 5)).balance == Decimal("749.90")
+        assert service.create(token, key, original) == transfer_id
+        assert client.get(path).json() == switched.json()
+        assert (
+            client.options(
+                path,
+                headers={
+                    "Origin": ORIGIN,
+                    "Access-Control-Request-Method": "PATCH",
+                    "Access-Control-Request-Headers": "if-match,x-csrf-token",
+                },
+            ).status_code
+            == 200
+        )
+    with database.sessions() as session:
+        assert (
+            session.scalar(
+                select(func.count()).select_from(Transfer).where(Transfer.user_id == own["owner"])
+            )
+            == 1
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(Transaction)
+                .where(Transaction.user_id == own["owner"])
+            )
+            == 0
+        )
+
+
+def test_transfer_edits_race_rollback_archive_and_revocation_preserve_financial_integrity(
+    context, transfer_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransferService(sessions)
+    transfer_id = service.create(
+        token, uuid4(), TransferInput(**transfer_body(own, status="planned"))
+    )
+    snapshot = service.get(token, transfer_id)
+    etag = transfer_etag(snapshot)
+    barrier = Barrier(2)
+
+    def update_amount(amount):
+        barrier.wait(timeout=10)
+        try:
+            service.update(token, transfer_id, TransferUpdateInput(amount=amount), etag)
+            return "saved"
+        except TransferStale:
+            return "stale"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = [executor.submit(update_amount, amount) for amount in ("100.10", "200.20")]
+        assert sorted(future.result(timeout=20) for future in outcomes) == ["saved", "stale"]
+    current = service.get(token, transfer_id)
+    assert current.status == "planned"
+    assert TransactionService(sessions).balance(
+        token, own["account"], date(2026, 1, 4)
+    ).balance == Decimal("1000.00")
+
+    def fail(_session):
+        raise SQLAlchemyError("synthetic transfer edit failure")
+
+    event.listen(database.sessions.class_, "before_commit", fail)
+    try:
+        with pytest.raises(SessionUnavailable):
+            service.update(
+                token, transfer_id, TransferUpdateInput(amount="300.00"), transfer_etag(current)
+            )
+    finally:
+        event.remove(database.sessions.class_, "before_commit", fail)
+    assert service.get(token, transfer_id) == current
+    with database.sessions.begin() as session:
+        session.get(Account, own["target"]).is_active = False
+    with pytest.raises(TransferRejected):
+        service.update(
+            token,
+            transfer_id,
+            TransferUpdateInput(description="Archived"),
+            transfer_etag(service.get(token, transfer_id)),
+        )
+    sessions.revoke_by_access(token)
+    with pytest.raises(AuthenticationDenied):
+        service.update(
+            token, transfer_id, TransferUpdateInput(amount="300.00"), transfer_etag(current)
+        )
+
+
+def test_balance_history_has_exact_daily_closings_and_preserves_archived_history(
+    context, transfer_resources, deletion_resources
+):
+    database, sessions, _, emails = context
+    own = transfer_resources[0]
+    token = sessions.login(emails[0], PASSWORD).access_token
+    service = TransactionService(sessions)
+    for amount, day, status in (
+        ("150.00", "2026-01-02", "posted"),
+        ("0.10", "2026-01-04", "posted"),
+        ("100.00", "2026-01-05", "posted"),
+        ("999.00", "2026-01-04", "planned"),
+    ):
+        service.create(
+            token,
+            uuid4(),
+            TransactionInput(**body(own, amount=amount, effective_date=day, status=status)),
+        )
+    transfers = TransferService(sessions)
+    transfers.create(token, uuid4(), TransferInput(**transfer_body(own)))
+    transfers.create(
+        token,
+        uuid4(),
+        TransferInput(**transfer_body(own, status="planned", effective_date="2026-01-05")),
+    )
+    removed = service.create(
+        token, uuid4(), TransactionInput(**body(own, amount="25.00", effective_date="2026-01-04"))
+    )
+    service.delete(token, removed, transaction_etag(service.get(token, removed)))
+    stack, make = clients(context)
+    with stack:
+        client = make(emails[0])
+        path = f"/api/v1/accounts/{own['account']}/balance/history"
+        response = client.get(path, params={"date_from": "2026-01-01", "date_to": "2026-01-06"})
+        assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+        assert response.json()["account_id"] == str(own["account"])
+        assert response.json()["points"] == [
+            {"date": f"2026-01-0{index}", "balance": amount}
+            for index, amount in enumerate(
+                ("1000.00", "850.00", "850.00", "349.90", "249.90", "249.90"), 1
+            )
+        ]
+        # A subrange starts from its actual closing, not from the opening balance again.
+        subrange = client.get(path, params={"date_from": "2026-01-04", "date_to": "2026-01-05"})
+        assert subrange.json()["points"] == response.json()["points"][3:5]
+        assert (
+            response.json()["points"][-1]["balance"]
+            == balance(client, own, "2026-01-06").json()["balance"]
+        )
+        with database.sessions.begin() as session:
+            session.get(Account, own["account"]).is_active = False
+        assert (
+            client.get(path, params={"date_from": "2026-01-01", "date_to": "2026-01-06"}).json()
+            == response.json()
+        )
+        target = client.get(
+            f"/api/v1/accounts/{own['target']}/balance/history",
+            params={"date_from": "2026-01-03", "date_to": "2026-01-05"},
+        )
+        assert [point["balance"] for point in target.json()["points"]] == [
+            "1000.00",
+            "1500.00",
+            "1500.00",
+        ]
+
+
+def test_balance_history_rejects_foreign_accounts_invalid_dates_and_oversized_periods(
+    context, resources
+):
+    stack, make = clients(context)
+    with stack:
+        client, other, anonymous = make(context[3][0]), make(context[3][1]), make()
+        own, foreign = resources
+        path = f"/api/v1/accounts/{own['account']}/balance/history"
+        params = {"date_from": "2026-01-01", "date_to": "2026-01-01"}
+        assert anonymous.get(path, params=params).status_code == 401
+        assert other.get(path, params=params).status_code == 404
+        for unavailable in (foreign["account"], uuid4()):
+            response = client.get(f"/api/v1/accounts/{unavailable}/balance/history", params=params)
+            assert response.status_code == 404 and response.json() == {
+                "detail": "Account not found"
+            }
+        assert client.get(path, params=params).json()["points"] == [
+            {"date": "2026-01-01", "balance": "1000.00"}
+        ]
+        for changes in (
+            {"date_from": "2025-12-31"},
+            {"date_from": "2026-01-02"},
+            {"date_to": "2026-02-30"},
+            {"date_to": "2026-04-04"},
+        ):
+            assert client.get(path, params=params | changes).status_code == 422
+        assert client.get(path).status_code == 422
+        longest = client.get(path, params=params | {"date_to": "2026-04-03"})
+        assert longest.status_code == 200 and len(longest.json()["points"]) == 93
+        assert all(point["balance"] == "1000.00" for point in longest.json()["points"])
+        with context[0].sessions.begin() as session:
+            session.get(Account, own["account"]).opening_balance = Decimal("-0.10")
+        assert client.get(path, params=params).json()["points"][0]["balance"] == "-0.10"
 
 
 def test_consolidated_balance_scopes_cancel_transfers_and_exclude_unbooked_money(

@@ -19,13 +19,12 @@ from pydantic import (
 from app.schemas.transactions import TransactionDetailsInput
 
 
-class TransferInput(BaseModel):
+class TransferDetailsInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True, hide_input_in_errors=True)
 
     from_account_id: UUID4
     to_account_id: UUID4
     amount: Decimal = Field(gt=0, max_digits=15, decimal_places=2)
-    status: Literal["planned", "posted"]
     effective_date: date
     description: str | None = Field(default=None, min_length=1, max_length=255)
 
@@ -51,13 +50,32 @@ class TransferInput(BaseModel):
 
     @model_validator(mode="after")
     def distinct_accounts(self):
-        if self.from_account_id == self.to_account_id:
+        if self.from_account_id is not None and self.from_account_id == self.to_account_id:
             raise ValueError("Select distinct accounts")
         return self
 
     @field_serializer("amount", when_used="json")
-    def money_string(self, value: Decimal) -> str:
-        return format(value, ".2f")
+    def money_string(self, value: Decimal | None) -> str | None:
+        return None if value is None else format(value, ".2f")
+
+
+class TransferInput(TransferDetailsInput):
+    status: Literal["planned", "posted"]
+
+
+class TransferUpdateInput(TransferDetailsInput):
+    from_account_id: UUID4 | None = None
+    to_account_id: UUID4 | None = None
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=15, decimal_places=2)
+    effective_date: date | None = None
+
+    @model_validator(mode="after")
+    def nonempty_nonnull(self):
+        if not self.model_fields_set or any(
+            getattr(self, name) is None for name in self.model_fields_set - {"description"}
+        ):
+            raise ValueError("Supply at least one field; only description may be null")
+        return self
 
 
 class TransferPostInput(BaseModel):

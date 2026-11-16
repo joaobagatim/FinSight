@@ -166,3 +166,22 @@ class ProjectedBalanceResponse(BaseModel):
     @field_serializer("base_balance", "posted_future_delta", "planned_delta", "projected_balance")
     def money_string(self, value: Decimal) -> str:
         return format(value, ".2f")
+
+
+class BalanceHistoryPoint(BaseModel):
+    date: date
+    balance: Decimal
+
+    @field_serializer("balance")
+    def money_string(self, value: Decimal) -> str:
+        return format(value, ".2f")
+
+
+class BalanceHistoryResponse(BaseModel):
+    account_id: UUID
+    account_name: str
+    opening_date: date
+    date_from: date
+    date_to: date
+    currency: Literal["BRL"] = "BRL"
+    points: list[BalanceHistoryPoint] = Field(min_length=1, max_length=93)

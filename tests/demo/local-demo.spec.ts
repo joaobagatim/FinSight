@@ -21,6 +21,7 @@ test('isolated demo shows synthetic finances through normal login', async ({ pag
   await page.getByRole('button', { name: 'Lançamentos', exact: true }).click()
   await expect(page.getByText('Receita mensal de exemplo', { exact: true })).toBeVisible()
   await expect(page.getByText('Próximo aluguel de exemplo', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Saldos', exact: true }).click()
   await page
     .getByLabel('Conta para consultar saldo')
     .selectOption({ label: 'Conta corrente fictícia' })
@@ -29,6 +30,34 @@ test('isolated demo shows synthetic finances through normal login', async ({ pag
   await page.setViewportSize({ width: 320, height: 740 })
   await expect(page.getByRole('note')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+
+  await page.getByRole('button', { name: 'Metas', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Suas metas', exact: true })).toBeVisible()
+  await expect(page.getByText('Carregando metas…', { exact: true })).not.toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Importações', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Importações de CSV', exact: true })).toBeVisible()
+  await expect(page.getByText('Carregando histórico…', { exact: true })).not.toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Dashboard', exact: true }).click()
+  const seed = JSON.parse(
+    readFileSync(new URL('../../.demo/seed.json', import.meta.url), 'utf8'),
+  ) as { opening: string }
+  await page.getByLabel('Data inicial', { exact: true }).fill(seed.opening)
+  await page.getByRole('button', { name: 'Consultar indicadores', exact: true }).click()
+  const indicators = page.getByRole('region', { name: 'Indicadores consultados', exact: true })
+  await expect(indicators).toBeVisible()
+  await expect(
+    indicators
+      .getByRole('figure', { name: 'Entradas e saídas por dia', exact: true })
+      .locator('svg')
+      .first(),
+  ).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+
   await page.getByRole('button', { name: 'Sair', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Acessar FinSight' })).toBeVisible()
 })

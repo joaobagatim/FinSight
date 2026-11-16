@@ -7,11 +7,16 @@ from datetime import date
 from uuid import UUID
 
 from pydantic import SecretStr
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import joinedload
 
 from app.models import Account, Transfer, TransferCreationRequest
-from app.schemas.transfers import TransferInput, TransferListResponse, TransferResponse
+from app.schemas.transfers import (
+    TransferInput,
+    TransferListResponse,
+    TransferResponse,
+    TransferUpdateInput,
+)
 from app.services.sessions import SessionService
 
 
@@ -28,6 +33,10 @@ class TransferConflict(Exception):
 
 
 class TransferStale(Exception):
+    pass
+
+
+class TransferRemoved(Exception):
     pass
 
 
@@ -48,6 +57,8 @@ class TransferService:
             if previous is not None:
                 if not hmac.compare_digest(previous.request_hash, digest):
                     raise TransferConflict()
+                if previous.transfer.deleted_at is not None:
+                    raise TransferRemoved()
                 transfer_id = previous.transfer_id
             else:
                 accounts = session.scalars(
@@ -90,8 +101,82 @@ class TransferService:
             )
             if row is None:
                 raise TransferNotFound()
+            if row.deleted_at is not None:
+                raise TransferRemoved()
             result = TransferResponse.model_validate(row)
         return result
+
+    def update(
+        self, token: SecretStr, transfer_id: UUID, data: TransferUpdateInput, etag: str
+    ) -> TransferResponse:
+        with self.sessions.authorized_transaction(token, lock=True) as (session, owner):
+            row = session.scalar(
+                select(Transfer)
+                .where(Transfer.id == transfer_id, Transfer.user_id == owner.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if row is None:
+                raise TransferNotFound()
+            if row.deleted_at is not None:
+                raise TransferRemoved()
+            changes = data.model_dump(exclude_unset=True)
+            from_id = changes.get("from_account_id", row.from_account_id)
+            to_id = changes.get("to_account_id", row.to_account_id)
+            # Lock both old and new references in a stable order before checking the snapshot.
+            accounts = session.scalars(
+                select(Account)
+                .where(
+                    Account.user_id == owner.user_id,
+                    Account.id.in_({row.from_account_id, row.to_account_id, from_id, to_id}),
+                )
+                .order_by(Account.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).all()
+            current = TransferResponse.model_validate(row)
+            if not hmac.compare_digest(transfer_etag(current), etag):
+                raise TransferStale()
+            owned = {account.id: account for account in accounts}
+            source, target = owned.get(from_id), owned.get(to_id)
+            effective_date = changes.get("effective_date", row.effective_date)
+            if (
+                from_id == to_id
+                or source is None
+                or target is None
+                or any(
+                    not account.is_active
+                    or account.currency != "BRL"
+                    or effective_date <= account.opening_date
+                    for account in (source, target)
+                )
+            ):
+                raise TransferRejected()
+            for field, value in changes.items():
+                setattr(row, field, value)
+            row.from_account, row.to_account = source, target
+            session.flush()
+            # Status and the durable creation digest are intentionally unchanged.
+            result = TransferResponse.model_validate(row)
+        return result
+
+    def delete(self, token: SecretStr, transfer_id: UUID, etag: str) -> None:
+        with self.sessions.authorized_transaction(token, lock=True) as (session, owner):
+            row = session.scalar(
+                select(Transfer)
+                .where(Transfer.id == transfer_id, Transfer.user_id == owner.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if row is None:
+                raise TransferNotFound()
+            if row.deleted_at is None:
+                current = TransferResponse.model_validate(row)
+                if not hmac.compare_digest(transfer_etag(current), etag):
+                    raise TransferStale()
+                # Retain identity and both legs together, including for archived accounts.
+                row.deleted_at = func.now()
+                session.flush()
 
     def post(self, token: SecretStr, transfer_id: UUID, etag: str) -> TransferResponse:
         with self.sessions.authorized_transaction(token, lock=True) as (session, owner):
@@ -103,6 +188,8 @@ class TransferService:
             )
             if row is None:
                 raise TransferNotFound()
+            if row.deleted_at is not None:
+                raise TransferRemoved()
             accounts = session.scalars(
                 select(Account)
                 .where(
@@ -155,7 +242,7 @@ class TransferService:
             query = (
                 select(Transfer)
                 .options(joinedload(Transfer.from_account), joinedload(Transfer.to_account))
-                .where(Transfer.user_id == owner.user_id)
+                .where(Transfer.user_id == owner.user_id, Transfer.deleted_at.is_(None))
             )
             if account_id is not None:
                 query = query.where(

@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -17,6 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     and_,
+    false,
     func,
 )
 from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship, validates
@@ -33,6 +35,13 @@ if TYPE_CHECKING:
 class ImportRow(Base):
     __tablename__ = "import_rows"
     __table_args__ = (
+        CheckConstraint(
+            "NOT selected OR (status IN ('pending', 'duplicate_candidate') "
+            "AND transaction_date IS NOT NULL AND description IS NOT NULL "
+            "AND char_length(btrim(description)) > 0 AND amount IS NOT NULL AND amount > 0 "
+            "AND type IS NOT NULL AND suggested_category_id IS NOT NULL)",
+            name="ck_import_rows_selected_valid",
+        ),
         ForeignKeyConstraint(
             ["user_id", "account_id", "import_job_id"],
             ["import_jobs.user_id", "import_jobs.account_id", "import_jobs.id"],
@@ -77,6 +86,7 @@ class ImportRow(Base):
     suggested_category_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     external_id: Mapped[str | None] = mapped_column(String(255))
     fingerprint: Mapped[str | None] = mapped_column(String(64))
+    selected: Mapped[bool] = mapped_column(Boolean, server_default=false())
     status: Mapped[str] = mapped_column(String(20), server_default="pending")
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

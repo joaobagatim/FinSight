@@ -747,3 +747,299 @@ fieldset {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+.balance-panels {
+  display: grid;
+  gap: 2rem;
+  min-width: 0;
+}
+.balance-history-panel {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.balance-history-panel button {
+  max-width: 100%;
+  min-height: 44px;
+  height: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.history-chart {
+  width: 100%;
+  height: 260px;
+  min-width: 0;
+  margin-block: 1rem;
+}
+.history-tooltip {
+  padding: 0.75rem;
+  font-size: 0.875rem;
+}
+.balance-history-result {
+  margin-top: 1.5rem;
+}
+.balance-history-result table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  margin-top: 1rem;
+  font-size: 0.875rem;
+}
+.balance-history-result th,
+.balance-history-result td {
+  padding: 0.75rem 0.4rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.balance-history-result caption {
+  text-align: left;
+  margin-bottom: 0.5rem;
+}
+
+.transfer-edit-panel button,
+.transfer-deletion-panel button,
+.account-opening-editor button,
+.goals-panel button {
+  max-width: 100%;
+  min-height: 44px;
+  height: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.transfer-edit-panel .field {
+  min-width: 0;
+}
+
+.reservation-alerts button {
+  white-space: normal;
+  height: auto;
+  min-height: 2.75rem;
+  max-width: 100%;
+}
+
+.imports-panel {
+  min-width: 0;
+}
+.imports-panel section {
+  margin-top: 24px;
+  min-width: 0;
+}
+.imports-panel h2,
+.imports-panel h3,
+.imports-panel h4,
+.imports-panel p,
+.imports-panel label,
+.imports-panel li,
+.imports-panel dd {
+  overflow-wrap: anywhere;
+}
+.imports-panel button {
+  white-space: normal;
+  height: auto;
+  min-height: 44px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.import-upload,
+.import-preview {
+  padding: clamp(16px, 3vw, 28px);
+  min-width: 0;
+}
+.import-upload form + section {
+  border-top: 1px solid var(--border);
+  padding-top: 24px;
+}
+.import-upload input[type='file'] {
+  padding: 10px 6px;
+  font-size: 13px;
+}
+.import-upload input[type='file']::file-selector-button {
+  max-width: 100%;
+  white-space: normal;
+}
+.import-sample-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 20px 0;
+}
+.import-sample-scroll table {
+  border-collapse: collapse;
+  min-width: 40rem;
+  width: 100%;
+  font-size: 13px;
+}
+.import-sample-scroll th,
+.import-sample-scroll td {
+  padding: 12px;
+  min-width: 8rem;
+  max-width: 16rem;
+  vertical-align: top;
+  text-align: left;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+}
+.import-sample-scroll caption {
+  text-align: left;
+  padding: 12px;
+  font-weight: 600;
+}
+.import-summary,
+.import-row dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+  gap: 16px;
+}
+.import-summary dd,
+.import-row dd {
+  margin: 6px 0 0;
+}
+.import-rows {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 16px;
+}
+.import-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.import-selection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin: 12px 0;
+}
+.import-selection input {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+
+.import-confirmation {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.import-confirmation-notice button {
+  max-width: 100%;
+  height: auto;
+  min-height: 40px;
+  white-space: normal;
+}
+
+.dashboard-panel,
+.dashboard-panel fieldset,
+.dashboard-result {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dashboard-panel button {
+  max-width: 100%;
+  white-space: normal;
+  height: auto;
+  min-height: 44px;
+}
+.dashboard-dates,
+.dashboard-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: 16px;
+}
+.dashboard-selection {
+  margin: 20px 0;
+}
+.dashboard-result {
+  border-top: 1px solid var(--border);
+  margin-top: 28px;
+  padding-top: 24px;
+}
+.dashboard-result h3 {
+  font-size: 22px;
+  margin-bottom: 16px;
+}
+.dashboard-cards {
+  margin: 24px 0;
+}
+.dashboard-card {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.dashboard-card dt {
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.dashboard-card dd {
+  margin: 12px 0 0;
+  font-size: clamp(24px, 3vw, 32px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-data,
+.dashboard-plots,
+.dashboard-plots figure {
+  min-width: 0;
+}
+.dashboard-data > h3 {
+  margin-top: 28px;
+}
+.dashboard-plots {
+  display: grid;
+  gap: 24px;
+}
+.dashboard-plots figure {
+  margin: 0;
+}
+.dashboard-plots figcaption {
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.dashboard-plot {
+  width: 100%;
+  height: 260px;
+  min-width: 0;
+  margin: 16px 0;
+}
+.dashboard-data details {
+  margin-top: 20px;
+}
+.dashboard-data summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding: 12px 0;
+  font-weight: 600;
+}
+.dashboard-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 12px;
+}
+.dashboard-table-scroll table {
+  border-collapse: collapse;
+  min-width: 36rem;
+  width: 100%;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-table-scroll caption {
+  text-align: left;
+  padding: 12px;
+  font-weight: 600;
+}
+.dashboard-table-scroll th,
+.dashboard-table-scroll td {
+  text-align: left;
+  padding: 12px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}

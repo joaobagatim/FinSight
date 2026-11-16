@@ -8,10 +8,14 @@ from fastapi.responses import JSONResponse
 from starlette.responses import PlainTextResponse
 
 from app.api.accounts import router as accounts_router
+from app.api.allocations import router as allocations_router
 from app.api.auth import router as auth_router
 from app.api.categories import router as categories_router
+from app.api.dashboard import router as dashboard_router
 from app.api.error_handlers import registration_validation_error
+from app.api.goals import router as goals_router
 from app.api.health import router as health_router
+from app.api.imports import router as imports_router
 from app.api.session_auth import router as session_router
 from app.api.transactions import balance_router
 from app.api.transactions import router as transactions_router
@@ -30,8 +34,19 @@ from app.core.session_http import (
 )
 from app.core.tokens import TokenConfigurationError
 from app.db.session import Database
-from app.services.accounts import AccountConflict, AccountNotFound, AccountStale
+from app.imports.csv_parser import CsvRejected
+from app.services.accounts import (
+    AccountConflict,
+    AccountNotFound,
+    AccountOpeningLocked,
+    AccountStale,
+)
+from app.services.allocations import AllocationRejected
 from app.services.categories import CategoryConflict, CategoryNotFound, CategoryStale
+from app.services.dashboard import DashboardRejected
+from app.services.goals import GoalConflict, GoalNotFound, GoalStale
+from app.services.import_review import ImportReviewClosed, ImportReviewStale
+from app.services.imports import ImportBusy, ImportConflict, ImportNotFound, ImportRejected
 from app.services.registration import RegistrationUnavailable
 from app.services.sessions import (
     AuthenticationDenied,
@@ -51,6 +66,7 @@ from app.services.transfers import (
     TransferConflict,
     TransferNotFound,
     TransferRejected,
+    TransferRemoved,
     TransferStale,
 )
 
@@ -116,9 +132,74 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def account_not_found(_request, _error):
         return JSONResponse({"detail": "Account not found"}, status_code=404)
 
+    @application.exception_handler(GoalNotFound)
+    async def goal_not_found(_request, _error):
+        return JSONResponse({"detail": "Goal not found"}, status_code=404)
+
+    @application.exception_handler(AllocationRejected)
+    async def allocation_rejected(_request, _error):
+        return JSONResponse(
+            {"detail": "Reservation rejected; check date, state and available amounts"},
+            status_code=422,
+        )
+
+    @application.exception_handler(DashboardRejected)
+    async def dashboard_rejected(_request, _error):
+        return JSONResponse(
+            {"detail": "Dashboard query rejected; check period and account scope"}, status_code=422
+        )
+
+    @application.exception_handler(ImportNotFound)
+    async def import_not_found(_request, _error):
+        return JSONResponse({"detail": "Import resource not found"}, status_code=404)
+
+    @application.exception_handler(ImportRejected)
+    async def import_rejected(_request, _error):
+        return JSONResponse(
+            {"detail": "Import rejected; check CSV source and account state"}, status_code=422
+        )
+
+    @application.exception_handler(CsvRejected)
+    async def csv_rejected(_request, error):
+        return JSONResponse({"detail": "CSV rejected", "code": str(error)}, status_code=422)
+
+    @application.exception_handler(ImportReviewStale)
+    async def import_review_stale(_request, _error):
+        return JSONResponse({"detail": "Preview changed; reload before reviewing"}, status_code=412)
+
+    @application.exception_handler(ImportReviewClosed)
+    async def import_review_closed(_request, _error):
+        return JSONResponse({"detail": "Preview record is not editable"}, status_code=409)
+
+    @application.exception_handler(ImportConflict)
+    async def import_conflict(_request, _error):
+        return JSONResponse({"detail": "Idempotency key conflict"}, status_code=409)
+
+    @application.exception_handler(ImportBusy)
+    async def import_busy(_request, _error):
+        return JSONResponse(
+            {"detail": "CSV processing busy; retry later"},
+            status_code=503,
+            headers={"Retry-After": "1"},
+        )
+
+    @application.exception_handler(GoalConflict)
+    async def goal_conflict(_request, _error):
+        return JSONResponse({"detail": "Idempotency key conflict"}, status_code=409)
+
+    @application.exception_handler(GoalStale)
+    async def goal_stale(_request, _error):
+        return JSONResponse({"detail": "Goal changed; reload before updating"}, status_code=412)
+
     @application.exception_handler(AccountConflict)
     async def account_conflict(_request, _error):
         return JSONResponse({"detail": "Idempotency key conflict"}, status_code=409)
+
+    @application.exception_handler(AccountOpeningLocked)
+    async def account_opening_locked(_request, _error):
+        return JSONResponse(
+            {"detail": "Account opening is protected by existing history"}, status_code=409
+        )
 
     @application.exception_handler(AccountStale)
     async def account_stale(_request, _error):
@@ -152,7 +233,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.exception_handler(TransferStale)
     async def transfer_stale(_request, _error):
-        return JSONResponse({"detail": "Transfer changed; reload before posting"}, status_code=412)
+        return JSONResponse(
+            {"detail": "Transfer changed; reload before proceeding"}, status_code=412
+        )
+
+    @application.exception_handler(TransferRemoved)
+    async def transfer_removed(_request, _error):
+        return JSONResponse({"detail": "Transfer removed"}, status_code=410)
 
     @application.exception_handler(TransactionNotFound)
     async def transaction_not_found(_request, _error):
@@ -207,7 +294,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(users_router)
     application.include_router(accounts_router)
     application.include_router(categories_router)
+    application.include_router(goals_router)
+    application.include_router(imports_router)
+    application.include_router(allocations_router)
     application.include_router(transactions_router)
     application.include_router(transfers_router)
     application.include_router(balance_router)
+    application.include_router(dashboard_router)
     return application

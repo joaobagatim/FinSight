@@ -5,7 +5,13 @@ import TransactionForm from '@/components/TransactionForm'
 import TransactionHistory from '@/components/TransactionHistory'
 import AccountBalance from '@/components/AccountBalance'
 
-export default function TransactionsPanel({ ownerId, onExpired, intent, onIntent }) {
+export default function TransactionsPanel({
+  ownerId,
+  onExpired,
+  intent,
+  onIntent,
+  onFinancialChange,
+}) {
   const [references, setReferences] = useState({
     accounts: [],
     categories: [],
@@ -17,7 +23,10 @@ export default function TransactionsPanel({ ownerId, onExpired, intent, onIntent
   const [revision, setRevision] = useState(0)
   const [balanceRevision, setBalanceRevision] = useState(0)
   const [actionOpen, setActionOpen] = useState(false)
-  const balanceChanged = useCallback(() => setBalanceRevision((value) => value + 1), [])
+  const balanceChanged = useCallback(() => {
+    setBalanceRevision((value) => value + 1)
+    onFinancialChange?.()
+  }, [onFinancialChange])
   const live = useRef(false)
   const fetching = useRef(false)
 

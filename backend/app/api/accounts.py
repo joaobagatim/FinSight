@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import SecretStr
 
 from app.api.dependencies import get_current_user, get_session_service
-from app.api.financial_auth import creation_key
+from app.api.financial_auth import creation_key, financial_mutation
 from app.api.financial_auth import financial_access as account_access
 from app.api.session_auth import SessionRequest, security
 from app.core.csrf import CsrfRejected
@@ -15,6 +15,7 @@ from app.schemas.accounts import (
     AccountCreatedResponse,
     AccountInput,
     AccountListResponse,
+    AccountOpeningInput,
     AccountResponse,
     AccountUpdateInput,
 )
@@ -84,5 +85,21 @@ def update_account(
         raise CsrfRejected()
     context.verify(user.session_id)
     result = service.update(context.values["access"], account_id, data, expected_etag)
+    response.headers["ETag"] = account_etag(result)
+    return result
+
+
+@router.patch("/{account_id}/opening", response_model=AccountResponse)
+def correct_account_opening(
+    account_id: UUID,
+    data: AccountOpeningInput,
+    response: Response,
+    token: Annotated[SecretStr, Depends(financial_mutation)],
+    service: Annotated[AccountService, Depends(account_service)],
+    expected_etag: Annotated[
+        str, Header(alias="If-Match", pattern=r'^"[0-9a-f]{64}"$', min_length=66, max_length=66)
+    ],
+):
+    result = service.correct_opening(token, account_id, data, expected_etag)
     response.headers["ETag"] = account_etag(result)
     return result

@@ -13,6 +13,7 @@ from app.api.financial_auth import financial_access as account_access
 from app.api.financial_auth import financial_mutation as category_mutation
 from app.schemas.transactions import (
     AccountBalanceResponse,
+    BalanceHistoryResponse,
     ConsolidatedBalanceResponse,
     ProjectedBalanceResponse,
     TransactionCreatedResponse,
@@ -171,3 +172,14 @@ def get_balance(
     service: Annotated[TransactionService, Depends(transaction_service)],
 ):
     return service.balance(token, account_id, as_of)
+
+
+@balance_router.get("/{account_id}/balance/history", response_model=BalanceHistoryResponse)
+def get_balance_history(
+    account_id: UUID,
+    date_from: date,
+    date_to: date,
+    token: Annotated[SecretStr, Depends(account_access)],
+    service: Annotated[TransactionService, Depends(transaction_service)],
+):
+    return service.balance_history(token, account_id, date_from=date_from, date_to=date_to)

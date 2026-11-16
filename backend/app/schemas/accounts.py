@@ -60,6 +60,27 @@ class AccountInput(BaseModel):
         return format(value, ".2f")
 
 
+class AccountOpeningInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True, frozen=True)
+
+    opening_balance: Decimal = Field(max_digits=15, decimal_places=2)
+    opening_date: date
+
+    @field_validator("opening_balance", mode="before")
+    @classmethod
+    def decimal_string(cls, value):
+        return AccountInput.decimal_string(value)
+
+    @field_validator("opening_date", mode="before")
+    @classmethod
+    def iso_date(cls, value):
+        return AccountInput.iso_date(value)
+
+    @field_serializer("opening_balance", when_used="json")
+    def serialize_money(self, value: Decimal) -> str:
+        return format(value, ".2f")
+
+
 class AccountUpdateInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True, frozen=True)
 

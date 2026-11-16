@@ -6,6 +6,470 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 
 ## Desenvolvimento
 
+O [roteiro integrado do MVP](docs/mvp-walkthrough.md) explica um fluxo completo
+com dados fictícios: cadastro, conta, CSV revisado, dashboard, saldo e reserva de
+meta, com valores esperados e um cenário de navegador reproduzível.
+
+### Indicadores no dashboard
+
+Após entrar, abra **Dashboard**. A primeira consulta usa o mês atual até hoje em
+São Paulo e as contas atualmente ativas. Os cartões mostram receitas, despesas
+e resultado líquido efetivados; resultado do período não é saldo acumulado.
+Os saldos continuam na área **Saldos**, com sua própria data de posição.
+
+Informe as datas inicial/final (inclusivas, até 366 dias e sem futuro), escolha
+contas ativas, todas incluindo arquivadas ou seleção manual de até 100 contas e
+clique em **Consultar indicadores**. A seleção manual permite carregar outras
+páginas de contas. Atualizar a lista limpa a seleção. O resultado mostra período,
+escopo, contagens, contas selecionadas e referência de São Paulo retornada pela
+API. Ausência de atividade é informada com zeros explícitos.
+
+Alterar filtros oculta os totais anteriores; respostas atrasadas não restauram
+uma consulta de filtros ou usuário anteriores. Sair da tela e voltar consulta
+novamente. Logout, expiração e troca de usuário limpam a área. Os dados ficam
+em memória, sem storage ou logs financeiros. Datas e dinheiro preservam os
+formatos exatos, sem conversão monetária para ponto flutuante. O backend continua
+responsável pela autorização e pelos cálculos. Abertura, transferências internas,
+reservas, planejados e removidos não entram nos cartões.
+
+O dashboard também apresenta entradas/saídas por dia e despesas por categoria.
+Cartões, gráficos e tabelas vêm de uma única resposta de `/dashboard/breakdown`;
+o cliente confere datas, contagens e somas exatas antes de exibir a consulta.
+As 20 maiores categorias são detalhadas e o excedente aparece como **Demais
+categorias**, com sua quantidade, sem omitir despesas. Categorias arquivadas
+mantêm o histórico; nomes refletem o cadastro no momento da consulta.
+
+Os gráficos usam escalas relativas ao maior valor de cada gráfico. Rótulos e
+tooltips preservam os valores monetários exatos. **Conferir valores diários** e
+**Conferir despesas por categoria** abrem tabelas acessíveis por teclado, com
+totais e zeros explícitos. Parcelas muito pequenas podem não aparecer na escala
+visual, mas seus valores continuam nas tabelas. Sem atividade, há mensagem
+explícita. Os gráficos são carregados sob demanda; falha nesse carregamento
+preserva os cartões e as tabelas. A série é atividade diária, sem saldo acumulado,
+previsões ou comparações automáticas entre períodos.
+
+### Resumo financeiro por período — API
+
+`GET /api/v1/dashboard/summary?date_from=2026-01-01&date_to=2026-01-31`
+consulta receitas, despesas e resultado líquido do usuário autenticado. As duas
+datas são obrigatórias e inclusivas; o intervalo aceita até 366 dias e termina,
+no máximo, no dia atual de São Paulo (`as_of` da resposta). Datas futuras são
+recusadas: esta consulta não é previsão. O resultado do período não é o saldo
+acumulado da conta.
+
+O escopo padrão `active` considera somente contas atualmente ativas. Use
+`scope=all` para incluir arquivadas ou `scope=selected&account_id=<uuid>` (parâmetro
+repetível, até 100 contas próprias distintas) para seleção explícita, inclusive
+arquivadas. Conta de outro usuário e conta inexistente retornam o mesmo `404`.
+Seleção vazia/duplicada, IDs sem `scope=selected` ou período inválido retornam
+`422`. `account_count` é a quantidade de contas no escopo, mesmo sem atividade;
+período anterior à abertura retorna atividade zero para aquela conta.
+
+Somente lançamentos `posted`, não removidos, datados dentro do período e após a
+abertura entram na soma, incluindo os criados por CSV confirmado. Categorias
+arquivadas preservam seu histórico. Saldo de abertura, transferências internas e
+reservas/retiradas de metas não compõem receita/despesa. `income`, `expense` e
+`net` são strings decimais exatas em BRL; `net = income - expense` pode ser
+negativo. Sem atividade, os valores são `"0.00"`. `transaction_count` informa
+quantos lançamentos contribuíram. Todos os totais e contagens são lidos em uma
+única consulta financeira SQL; a API não soma apenas uma página do histórico.
+
+A rota usa autenticação e controles HTTP financeiros existentes (CORS, limites,
+`Cache-Control: no-store`). Não aceita `user_id` para escolher o proprietário.
+O contrato já pode ser consultado pela tela de indicadores do dashboard;
+os gráficos usam a resposta unificada de breakdown. Não há dependência ou migração nova;
+schema0017 continua necessário, sem atualização automática do banco pessoal.
+
+### Dados para gráficos do dashboard — API
+
+`GET /api/v1/dashboard/breakdown` aceita os mesmos parâmetros de período e
+escopo do resumo. Devolve todos os campos do resumo junto de `daily`,
+`expense_categories`, `expense_category_count`, `category_limit` e
+`other_expenses`. Totais, série e categorias partem dos mesmos lançamentos
+autorizados em uma única instrução SQL, sob o mesmo snapshot financeiro.
+`/dashboard/summary` preserva seu contrato anterior.
+
+`daily` contém um ponto por data, em ordem crescente, incluindo ambas as
+extremidades (até 366 pontos). Cada ponto informa `income`, `expense`, `net` e
+`transaction_count`. Dias sem movimento têm zeros explícitos. A série apresenta
+atividade diária, não saldo acumulado ou projeção.
+
+`expense_categories` traz até as 20 maiores categorias de despesa, por valor
+decrescente; empates usam o UUID da categoria. Cada item informa `category_id`,
+`name`, `amount` e `transaction_count`. Os nomes refletem o cadastro no momento
+da consulta, inclusive categorias arquivadas com histórico. O campo
+`expense_category_count` informa o total de categorias com despesa no período.
+O excedente está em `other_expenses`, com `amount`, `category_count` e
+`transaction_count`; nenhum valor é descartado. Quando não há excedente, esses
+campos são zero. Um período sem despesas tem lista vazia e excedente zero.
+
+Soma das categorias exibidas mais excedente = despesa do resumo; a série diária
+também fecha com os totais do período. Dinheiro permanece Decimal/string com
+duas casas: os valores são convertidos para texto no SQL antes do JSON, sem
+passar por ponto flutuante. O namespace mantém os controles de autenticação,
+CORS, limites e `no-store`. Não há dependência, tabela ou migração nova; os
+gráficos visuais já usam esse contrato na área Dashboard.
+
+### Preparar uma prévia CSV pelo navegador
+
+Entre no FinSight e abra **Importações**. Selecione uma conta ativa, escolha um
+arquivo `.csv` UTF-8 de até 1 MiB/5.000 registros e clique em **Analisar arquivo**.
+A análise mostra uma amostra e não guarda um job. Se o cabeçalho for ambíguo,
+escolha explicitamente `;` ou `,` e analise novamente. Contas adicionais são
+carregadas por paginação; contas arquivadas não recebem novas prévias.
+
+Escolha as colunas de data, descrição e valor com sinal ou débito/crédito. Cada
+campo deve usar uma coluna diferente. Selecione explicitamente os formatos de
+data e de valor; a coluna de referência é opcional. Alterar conta, arquivo ou
+separador invalida a análise anterior. A amostra permite rolagem horizontal em
+telas estreitas e o conteúdo é mostrado como texto, sem interpretar HTML.
+
+**Guardar prévia para revisão** salva somente o job e os registros interpretados.
+A consulta apresenta conta, abertura, situação, total, inválidos e lançamentos
+criados, além de valores exatos e motivos por registro. Datas anteriores ou iguais
+à abertura são inválidas. Registros não identificados não são apresentados como
+zero. **Carregar mais registros da prévia** e o histórico usam a paginação real.
+Prévias de contas arquivadas continuam consultáveis. O aviso de arquivo igual
+não elimina compras idênticas nem substitui uma revisão de duplicidades.
+
+Criar uma prévia **não altera saldos nem cria lançamentos**. **Revisar registro**
+permite corrigir data, descrição, valor absoluto, tipo e categoria. A seleção
+começa desmarcada e exige dados válidos, conta ativa e categoria própria ativa
+do mesmo tipo. Salvar uma correção desmarca o registro para nova conferência.
+Correção e seleção preservam as páginas já carregadas. **Conferir confirmação da
+seleção** abre uma consulta atual da seleção, totais, avisos e impacto no saldo e
+nas reservas. Transferências e estornos
+precisam ser conferidos: o sinal do valor sozinho não comprova sua natureza.
+Uma prévia cria um vínculo com a conta, considerado pela proteção existente da
+referência de abertura. Se precisar redefini-la, faça isso antes de guardar o job.
+
+O cliente bloqueia duplo envio e preserva a mesma chave/corpo em memória durante
+a navegação interna quando o resultado não pode ser confirmado. **Conferir e
+repetir envio da prévia** repete a intenção original, inclusive se a conta tiver
+sido arquivada após uma criação bem-sucedida. Sair da tela não cancela uma criação
+já concluída. Confira o histórico antes de encerrar uma tentativa ou criar outra.
+Recarregar a página perde esse estado; logout, expiração e troca de usuário o
+limpam. Arquivos e intenções não vão para localStorage/sessionStorage ou logs.
+
+O frontend confere o perfil ativo antes de cada chamada protegida e usa a sessão
+e CSRF existentes. O backend continua responsável pela autorização e validação.
+Conflitos preservam o rascunho e exigem recarregar a revisão antes de salvar.
+Após resposta perdida, recarregue para consultar o resultado antes de reenviar.
+Um registro selecionado pode ser desmarcado mesmo após arquivar sua conta ou
+categoria; esses estados impedem novas seleções. Prévias encerradas e registros
+já vinculados a lançamentos ficam protegidos contra alterações.
+
+A API de importação atual requer a migração 0017, sem nova dependência.
+O ambiente e o banco pessoais não são atualizados automaticamente.
+
+### API de upload e prévia CSV
+
+A API permite inspecionar e guardar uma prévia em uma conta própria ativa em BRL.
+O CSV original é processado em memória e não é salvo em disco ou no banco. Somente
+metadados e linhas normalizadas da prévia são persistidos. Esses dados continuam
+sensíveis e são consultados somente pelo proprietário autenticado.
+A interface acima consome as rotas de prévia e revisão. Essas operações não
+criam transações, transferências ou reservas. A confirmação financeira é uma
+operação separada e explícita, disponível na tela de confirmação e na API.
+
+Rotas autenticadas, com respostas `no-store`:
+
+- `POST /api/v1/imports/inspect`: inspeciona colunas, separador, total de registros,
+  até cinco registros de amostra e arquivos iguais já enviados àquela conta.
+  Não cria job. Exige Origin/CSRF.
+- `POST /api/v1/imports`: normaliza e guarda um job em `review`, com linhas
+  `pending` ou `invalid`. Exige Origin/CSRF e `Idempotency-Key` UUIDv4.
+- `GET /api/v1/imports`: histórico próprio paginado (`limit/offset`).
+- `GET /api/v1/imports/{id}`: metadados, contadores, inválidas e quantidade de
+  outros jobs da mesma conta com o mesmo checksum.
+- `GET /api/v1/imports/{id}/rows`: registros da prévia paginados, valores exatos em
+  strings, categoria, seleção, pendências, permissões de revisão e `etag` por
+  registro. Acesso a job ausente ou alheio retorna 404.
+- `GET /api/v1/imports/{id}/rows/{row_id}`: versão atual com cabeçalho `ETag`.
+- `GET /api/v1/imports/{id}/duplicates`: conferência informativa de possíveis
+  duplicatas, por usuário e conta, sem modificar os registros.
+- `GET /api/v1/imports/{id}/confirmation`: seleção atual, totais, avisos e impacto
+  no saldo/reservas, com `ETag`. Depois de concluir, devolve o recibo retido.
+- `POST /api/v1/imports/{id}/confirm`: confirma a seleção consultada, com
+  Origin/CSRF, `If-Match` e `Idempotency-Key` UUIDv4. Veja o contrato abaixo.
+- `PATCH /api/v1/imports/{id}/rows/{row_id}`: correção completa de
+  `transaction_date`, `description`, `amount` positivo em string decimal, `type`
+  (`income`/`expense`) e `category_id` opcional/null. Desmarca a seleção,
+  normaliza o registro para `pending` e preserva sua identidade de origem.
+- `PATCH /api/v1/imports/{id}/rows/{row_id}/selection`: somente
+  `{"selected": true}` ou `false`, sem criar movimentos financeiros.
+
+As duas rotas PATCH exigem Origin/CSRF e `If-Match` da versão consultada.
+Retornam 412 para versão desatualizada, 409 para revisão encerrada/vínculo
+financeiro e 422 para dados incompatíveis. A API obtém proprietário, conta e
+estado no servidor, coordena mutações sob lock e devolve nova versão. Contadores
+do job incluem `selected_rows`; a seleção não equivale a aprovação financeira.
+
+O transporte é JSON com `account_id`, `filename` (somente nome-base `.csv`),
+`content_base64` (bytes do CSV codificados em base64) e `delimiter` opcional
+(`;` ou `,`). A criação também exige `mapping` com os índices de colunas e
+formatos descritos abaixo. É necessário escolher o separador explicitamente
+quando o cabeçalho for ambíguo. O limite do CSV decodificado é 1 MiB; o corpo
+JSON é limitado a 1.500.000 bytes reais recebidos, incluindo a expansão base64.
+Somente essas duas rotas de envio têm o limite maior; as demais operações
+financeiras conservam seu limite anterior. Multipart não é aceito nesta API.
+
+Inspeção e criação compartilham um limite de duas operações em processamento por
+processo, sem fila; saturação retorna 503 com `Retry-After`. Origem/CSRF, sessão,
+paginação, tipo de arquivo e limites são verificados pelo servidor. Não coloque
+conteúdo de extratos, amostras ou respostas em logs, screenshots ou evidências.
+
+A conta e sua abertura são obtidas no servidor. Linhas anteriores ou iguais à
+abertura permanecem inválidas. Job, linhas e chave de repetição são confirmados
+juntos, sob o mesmo lock de usuário das operações financeiras. Falha desfaz todos.
+A mesma chave e conteúdo normalizado da intenção retornam o mesmo job, inclusive
+após arquivar a conta; outra entrada com a mesma chave retorna 409. Uma chave nova
+cria outra prévia e o checksum apenas avisa sobre arquivos iguais: não elimina
+compras idênticas nem autoriza gravação de transações. A confirmação financeira
+exige a operação explícita separada. Repetir a criação
+original não restaura dados anteriores nem desfaz decisões de revisão.
+
+Requer a revisão Alembic `0017_import_confirmation`, filha de 0016.
+A 0015 mantém a memória de repetição e o índice de checksum por usuário/conta;
+a 0016 adiciona `import_rows.selected`, inicialmente falso, e restrição de
+consistência. Permanecem 18 tabelas incluindo `alembic_version`. O downgrade
+0016 → 0015 recusa descartar seleções existentes; sem seleções, preserva os dados
+corrigidos e categorias. A 0017 acrescenta chave de confirmação, hash da intenção
+e recibo JSONB no job, com unicidade por usuário/chave e restrição de consistência.
+Não acrescenta tabela: permanecem 18. A 0017 recusa downgrade enquanto houver
+confirmações retidas. Jobs anteriores recebem campos nulos, sem importar ou
+alterar dados existentes. A 0015 também protege chaves retidas. Migrações não são aplicadas no startup nem ao banco
+pessoal automaticamente. Não há nova dependência nesta entrega.
+
+### API de confirmação da seleção CSV
+
+Consulte `GET /api/v1/imports/{id}/confirmation` antes de confirmar. A resposta
+contém os registros selecionados, elegibilidade e pendências, receitas/despesas
+totais, quantidade com data futura, avisos de duplicidade referentes à seleção e
+posição de saldo/reservas. `as_of` é hoje em São Paulo ou a abertura da conta,
+quando ela ainda é futura. Movimentos posteriores a essa data não entram no saldo
+mostrado; manterão a data original após importação. Todos os valores monetários
+são strings decimais exatas.
+
+Use o `ETag` consultado em `If-Match`, uma chave UUIDv4 nova para essa intenção
+em `Idempotency-Key` e este corpo JSON (limite de 16 KiB):
+
+```json
+{
+  "acknowledge_duplicates": true,
+  "acknowledge_classification": true,
+  "acknowledge_reservations": true
+}
+```
+
+Os três reconhecimentos são obrigatórios e estritos. Não envie IDs de usuário,
+conta, linhas ou valores: a seleção e as referências são obtidas no servidor.
+Confira possíveis duplicatas e resultados parciais, classifique transferências
+e estornos manualmente e desmarque o que não deve virar receita/despesa.
+Confirme conscientemente o impacto sobre reservas. Os avisos não eliminam
+automaticamente duas compras legítimas com dados iguais.
+
+A operação revalida a versão, seleção, conta/categorias ativas e compatíveis,
+datas após abertura, duplicidades e posição financeira sob o lock do usuário.
+Mudanças tornam a versão antiga inválida (`412`); recarregue e revise antes de
+iniciar outra intenção. Seleção vazia/incompatível retorna `422`; prévia fechada
+ou vínculos financeiros incompatíveis retornam `409`. Acesso alheio/ausente
+retorna `404`; sessão e Origin/CSRF são obrigatórios.
+
+Uma única transação SQL cria somente os selecionados como `posted`, preservando
+datas/valores/categorias e o vínculo único com cada linha. As linhas importadas
+ficam desmarcadas e imutáveis pela revisão; válidas não selecionadas ficam
+`ignored`, inválidas continuam identificadas. O job termina em `completed` e não
+aceita um segundo lote. Falha desfaz lançamentos, estados, contadores e recibo.
+Reservas não são liberadas ou reduzidas: despesas são permitidas e o recibo
+informa saldo livre negativo/reserva descoberta quando houver.
+
+O resultado `200` contém quantidades importadas/não importadas (esta última inclui
+inválidas), valores, posição financeira em `as_of` e data/hora da confirmação.
+É um recibo histórico, não um saldo atual. Depois de uma resposta perdida,
+consulte o contexto para recuperar esse recibo ou repita a mesma chave, corpo e
+`If-Match`; a API retorna o resultado original sem novos lançamentos, inclusive
+após arquivar conta/categoria. Reutilizar a chave com outra versão/entrada ou
+usar nova chave em job já confirmado retorna `409`. Repetir o upload original
+não restaura a prévia nem os lançamentos. Nenhum fluxo de estorno, exclusão de
+importados ou segunda confirmação do mesmo job é disponibilizado nesta unidade.
+
+### Confirmar pelo navegador e recuperar o resultado
+
+Na prévia, use **Conferir confirmação da seleção**. Confira a conta, o arquivo,
+a data da posição financeira, receitas/despesas, saldo antes/depois, reservas e
+registros selecionados. A lista mostra 50 de cada vez; **Mostrar mais
+selecionados** permite conferir os demais. Avisos por registro, arquivo igual,
+período sobreposto e busca parcial de duplicatas são apresentados nessa consulta.
+Registros futuros conservam a data e só entram no saldo a partir dela.
+
+As três ciências precisam ser marcadas explicitamente: revisão de duplicatas,
+classificação de transferências/estornos e impacto nas reservas. Só então
+**Confirmar importação** fica disponível. Duplo clique é bloqueado. Despesas que
+comprometem reservas mostram o valor descoberto; nenhuma reserva é liberada.
+Após confirmar, o recibo mostra quantidades e posição histórica e o histórico e
+os alertas de reservas são atualizados. **Consultar recibo da importação** abre
+novamente esse resultado, inclusive se a conta tiver sido arquivada.
+
+Se a resposta não puder ser confirmada, **Consultar resultado da confirmação**
+busca o recibo. **Repetir mesma confirmação** usa a mesma chave, versão e corpo,
+sem criar outra intenção. Navegar para outra área mantém essa tentativa e oferece
+**Consultar confirmação CSV** para retornar; não há reenvio automático ao navegar.
+Uma tentativa pendente impede iniciar a confirmação de outra prévia, mas a
+consulta e revisão continuam disponíveis.
+
+Uma versão desatualizada ou tentativa recusada exige consultar o resultado antes
+de **Revisar nova versão**. Essa ação descarta apenas a tentativa recusada local
+e exige marcar novamente as três ciências; não desfaz uma confirmação no servidor.
+Pedidos com resultado desconhecido mantêm a mesma intenção até serem resolvidos.
+Sair da tela ou da conta não cancela uma requisição já enviada.
+
+A tentativa fica somente na memória do React, vinculada ao usuário e à prévia;
+não vai para localStorage/sessionStorage ou logs. Logout, expiração e troca de
+usuário a limpam. Recarregar o navegador também perde esse estado: consulte o
+recibo e o histórico antes de iniciar outra intenção. Não há nova dependência,
+endpoint, migração ou aplicação ao banco pessoal nesta entrega de interface.
+
+### Conferir possíveis duplicatas
+
+Na prévia, **Verificar possíveis duplicatas** consulta os dados atuais da mesma
+conta e usuário. A conferência é informativa: não exclui, desmarca, confirma ou
+escolhe automaticamente quais registros devem ser importados. Duas compras reais
+podem ter os mesmos dados. Lançamentos planejados também entram na comparação.
+
+O fingerprint combina conta, data, valor exato, tipo e descrição normalizada
+(Unicode NFKC, comparação sem diferença de maiúsculas/minúsculas e espaços
+equivalentes). Acentos e pontuação não são removidos. Referências externas são
+comparadas exatamente, inclusive quando os demais dados ou as datas diferem.
+O relatório distingue coincidências nesta prévia, em outras prévias da conta e
+em lançamentos existentes. Não devolve os dados dos registros encontrados.
+
+Prévias canceladas/falhas e lançamentos removidos ficam fora da busca histórica.
+Registros inválidos, incompletos ou ignorados são informados como não conferidos
+por dados/referência. O aviso de período considera o intervalo das datas
+interpretadas de outras prévias em revisão/concluídas; sobreposição de intervalos
+não comprova duplicidade de cada registro. Arquivo igual continua com aviso próprio.
+
+São conferidos até 5.000 registros de origem e até 10.000 candidatos históricos
+por fonte (outras prévias e lançamentos). Atingir o limite indica resultado
+parcial, sem afirmar ausência de outras coincidências. O resultado é um retrato
+da conferência: repita após novas prévias ou alterações em outra tela. Corrigir
+ou selecionar registros limpa o relatório mostrado para evitar avisos antigos.
+Os avisos são apresentados de 50 em 50 na tela. Falha de consulta não significa
+ausência de duplicatas e remove o resultado anterior.
+
+A API usa sessão, autorização própria, respostas `no-store` e o lock de usuário
+compartilhado com mutações durante a leitura. Fingerprints são calculados em
+memória a partir dos dados atuais; o serviço não grava fingerprint/status ou
+seleção no banco. A API de confirmação revalida esses dados e a idempotência em
+uma operação separada. A conferência de duplicatas não exige migração adicional.
+
+### Importação CSV — núcleo inicial
+
+O módulo interno `app.imports.csv_parser` prepara a importação assistida da
+Fase 4. Este primeiro incremento não adiciona upload HTTP, tela de importação,
+jobs persistidos ou confirmação financeira. Nenhum arquivo é salvo e nenhuma
+transação é criada pelo parser. A revisão pelo usuário e a confirmação explícita
+serão implementadas nos próximos incrementos.
+
+O núcleo aceita bytes UTF-8, com ou sem BOM, separador `;` ou `,` e campos entre
+aspas. Limites: 1 MiB, 5.000 registros de dados, 32 colunas e 4.096 caracteres
+por célula. Cabeçalhos vazios/duplicados são recusados. O separador só é inferido
+quando uma única alternativa corresponde ao cabeçalho; ambiguidade exige escolha
+explícita. Células podem ter quebras de linha entre aspas, mas descrições de
+lançamentos devem ser texto de uma linha, com até 255 caracteres.
+
+`CsvLayout` mapeia índices distintos de data, descrição e valor com sinal, ou
+débito/crédito separados. Os formatos de data (`iso` ou `day-first`) e monetário
+(`decimal-dot` ou `decimal-comma`) são explícitos. Assim, `1.234` representa
+R$ 1.234,00 somente no formato com vírgula decimal; no formato de ponto decimal
+é recusado por possuir três casas. Não há arredondamento silencioso, conversão
+por float ou adivinhação do formato. Débito/crédito exigem somente um lado
+positivo. Valores zero, não finitos ou acima de NUMERIC(15,2) são inválidos.
+
+`normalize_rows` gera uma prévia técnica com `Decimal`, data, tipo, identificador
+externo opcional e códigos de erro por registro. Datas anteriores ou iguais à
+abertura são inválidas. O chamador deverá obter essa abertura de uma conta
+autorizada no backend; o parser não autentica nem concede acesso a contas.
+Linhas com campos faltantes/extras permanecem na prévia como inválidas. Duas
+compras idênticas são preservadas: detecção de possíveis duplicatas e decisão do
+usuário serão responsabilidade do serviço de revisão, ainda não implementado.
+
+Erros estruturais usam códigos fixos sem repetir o conteúdo recebido; objetos de
+prévia não incluem dados no `repr`. Não registre conteúdo de extratos em logs.
+O checksum SHA-256 é metadado técnico, não uma autorização de importação.
+
+Para validar somente esta unidade, na raiz:
+
+```powershell
+backend/.venv/Scripts/python.exe -m pytest -c backend/pyproject.toml backend/tests/unit/test_csv_parser.py -s
+```
+
+O caso de 5.000 linhas mede somente leitura/normalização em memória; não mede
+upload, banco ou interface e não comprova o tempo total de uma importação.
+O núcleo do parser não exige nova dependência ou migração; a API de prévia
+documentada acima requer a revisão 0015.
+
+### Reservas e progresso das metas
+
+Na área **Metas**, use **Reservas e progresso** para reservar dinheiro de uma
+conta ou retirar uma reserva. Reserva é um compromisso lógico: não cria despesa,
+receita ou transferência e não altera o saldo bancário. O saldo livre corresponde
+ao saldo bancário menos o total reservado naquela conta. O progresso considera
+todas as contas da meta; pode superar 100%, com excedente e faltante exibidos
+separadamente. Alterar a situação da meta não libera reservas automaticamente.
+
+Novas reservas exigem meta e conta próprias ativas, em BRL, com saldo livre
+suficiente. Retiradas são limitadas ao valor reservado naquela meta e conta e
+continuam disponíveis para contas arquivadas e metas concluídas/canceladas.
+Cada operação é registrada no dia atual de `America/Sao_Paulo`; não há lançamentos
+de reserva retroativos/futuros ou edição/exclusão do livro. Uma retirada registra
+um novo movimento negativo e preserva os anteriores.
+
+Despesas e transferências continuam permitidas quando comprometerem reservas.
+O aviso mostra a parcela reservada sem cobertura e o saldo livre, inclusive
+negativo. Ele é calculado novamente ao navegar, ao alterar lançamentos ou
+transferências e ao consultar/recarregar reservas. Não há notificações em segundo
+plano; mudanças de outra aba exigem nova consulta. Nenhum compromisso é apagado
+para ocultar insuficiência. O aviso lista até 50 contas e informa quando há mais.
+
+Contratos autenticados, sempre limitados ao proprietário da sessão:
+
+- `GET /api/v1/goals/{id}/funding`: reservado, progresso, faltante e excedente.
+- `GET /api/v1/goals/{id}/allocation-context?account_id={uuid}`: posição combinada
+  de meta/conta, saldo livre e reserva do par, com `ETag`.
+- `POST /api/v1/goals/{id}/allocations`: `account_id`, `kind` (`reserve` ou
+  `withdraw`), `amount` decimal positivo em string, `allocation_date` e `notes`
+  opcional. Exige Origin/CSRF, chave UUIDv4 `Idempotency-Key` e `If-Match` do contexto.
+- `GET /api/v1/goals/{id}/allocations`: livro assinado, paginado por `limit/offset`.
+- `GET /api/v1/accounts/{id}/availability`: saldo bancário, reservado, livre e
+  reserva sem cobertura na data atual.
+- `GET /api/v1/reservations/alerts`: contas próprias com reservas comprometidas.
+
+Valores e percentuais usam strings exatas, com duas casas. Dinheiro é calculado
+com Decimal/NUMERIC no backend e strings/BigInt no cliente. Concorrência é
+serializada por usuário junto das demais operações financeiras. Contexto alterado
+retorna 412 e exige nova consulta. Uma repetição da mesma chave/corpo retorna o
+mesmo movimento, mesmo após mudança de dia ou arquivamento; corpo diferente
+retorna 409. A intenção fica somente na memória do navegador e sobrevive à
+navegação interna; após recarregar a página, confira o histórico antes de criar
+outra operação. Falha de consulta não é apresentada como saldo zero.
+
+Essa entrega requer a revisão Alembic `0014_allocation_requests`: acrescenta uma
+tabela técnica de repetição e uma chave composta, sem modificar valores existentes
+no livro. O schema tem 17 tabelas, incluindo `alembic_version`. O downgrade recusa
+descartar chaves retidas. A aplicação não executa migrações no startup; selecione
+e confira o banco de destino antes de aplicar `alembic upgrade head`. O DBeaver
+continua acessando o PostgreSQL do Docker por localhost/porta configurada.
+Não é necessário instalar o servidor PostgreSQL no Windows.
+
+Validação direcionada: `backend/tests/unit/test_allocation_contract.py`,
+`backend/tests/integration/test_allocations_api.py` (PostgreSQL descartável) e
+`tests/auth-browser/reservations.spec.ts` (Playwright/TypeScript). Localmente são
+selecionados casos novos/afetados; a regressão completa permanece no CI.
+
+### Histórico da infraestrutura inicial
+
 A infraestrutura da Fase 0 está implementada. A Fase 1 adiciona modelos e migrações
 de usuários, sessões, contas, categorias, prévias de importação,
 transações, transferências, metas e alocações, além do cadastro de usuários.
@@ -330,7 +794,9 @@ financeiro é criado pelas migrations.
 
 `0011_transfer_requests` acrescenta a tabela técnica `transfer_creation_requests`
 e a chave composta proprietário/id em `transfers`, preservando transferências
-existentes. O schema atual tem quinze tabelas físicas, incluindo `alembic_version`.
+existentes. `0012_transfer_deletion` acrescenta o marcador nullable de exclusão
+lógica em transferências. `0013_goal_creation_requests` acrescenta a memória técnica de criação de metas.
+O schema atual tem dezesseis tabelas físicas, incluindo `alembic_version`.
 O controle técnico `alembic_version` acompanha as revisões. As dez tabelas de
 domínio estão modeladas; autenticação HTTP e cadastro/consulta de contas próprias
 estão disponíveis. Os demais recursos financeiros ainda serão implementados.
@@ -360,11 +826,11 @@ ORDER BY table_name;
 ```
 
 Resultado esperado após `upgrade head`: nome do banco configurado, uma linha
-`0011_transfer_requests` e as quinze tabelas `alembic_version`, `users`,
+`0013_goal_creation_requests` e as dezesseis tabelas `alembic_version`, `users`,
 `user_sessions`, `accounts`, `categories`, `import_jobs`, `import_rows`,
 `transactions`, `transfers`, `financial_goals`, `goal_allocations` e
 `refresh_token_history`, `account_creation_requests`, `transaction_creation_requests`
-e `transfer_creation_requests`.
+e `transfer_creation_requests`, além de `goal_creation_requests`.
 Antes do primeiro upgrade, essas tabelas ainda não existem. As consultas acima
 são somente de leitura. A migração não cria usuários nem sessões automaticamente.
 
@@ -1086,7 +1552,7 @@ SELECT count(*) AS persisted_creation_requests
 FROM public.account_creation_requests;
 ```
 
-Resultado esperado em um banco recém-migrado: revisão `0011_transfer_requests`,
+Resultado esperado em um banco recém-migrado: revisão `0013_goal_creation_requests`,
 cinco colunas não nulas, chave primária composta, duas chaves estrangeiras,
 verificações de digest/UUIDv4 e zero registros. Nenhuma conta, usuário ou chave é
 criada automaticamente. A API continua sem executar migrations no startup.
@@ -1304,6 +1770,48 @@ Os testes de navegador desta simulação ficam em
 `tests/auth-browser/projected-balance.spec.ts`; os cenários de API e cálculo ficam
 nos dois casos `test_projected_balance_*` de
 `backend/tests/integration/test_manual_transactions.py`.
+
+### Evolução diária do saldo
+
+Em **Saldos**, a seção **Evolução do saldo** consulta uma conta própria, inclusive
+arquivada, por um período de 1 a 93 dias. As duas datas entram no resultado; o
+início deve ser igual ou posterior à abertura da conta. Cada ponto representa a
+posição ao final do dia. Dias sem movimentos repetem a última posição.
+
+O cálculo inclui saldo inicial, receitas/despesas e transferências registrados
+como efetivados. Planejados e lançamentos excluídos ficam fora. Um período menor
+começa com o saldo efetivado da sua primeira data, incluindo movimentos anteriores,
+e não reaplica a abertura. Se escolher datas futuras, somente os efetivados já
+cadastrados para essas datas entram; não se trata de uma projeção de planejados.
+
+```http
+GET /api/v1/accounts/UUID-DA-CONTA/balance/history?date_from=2026-01-01&date_to=2026-01-31
+```
+
+A rota exige sessão e conta do próprio usuário. Conta ausente/alheia retorna o
+mesmo 404. Datas inválidas, invertidas, anteriores à abertura ou mais de 93 dias
+retornam 422. A resposta `no-store` contém `account_id`, `account_name`,
+`opening_date`, `date_from`, `date_to`, `currency=BRL` e `points`, com `date` e
+`balance` em cada dia; valores monetários são strings com duas casas.
+
+Uma única instrução SQL combina a posição efetivada inicial, movimentos diários
+e soma acumulada no mesmo snapshot. Datas são dias civis; valores usam
+Decimal/NUMERIC. Não há nova tabela, saldo persistido ou migração. A consulta usa
+os registros atuais, sem reconstituir versões históricas de lançamentos editados.
+
+O gráfico Recharts é carregado quando há resultado. Seu eixo vertical é ajustado
+ao mínimo/máximo informados. A posição visual usa uma razão limitada calculada
+com inteiros `BigInt`; os valores monetários originais não são convertidos para
+ponto flutuante. Tooltip e tabela apresentam as strings exatas. A tabela de
+valores diários é a alternativa acessível ao desenho e continua disponível se o
+arquivo do gráfico não carregar. Alterar conta/datas oculta o resultado anterior;
+erro ou resposta incompleta não vira saldo zero.
+
+Dependências de gráfico: Recharts 3.10.1 e react-is 19.3.1, com versões e lockfile
+fixados. Os testes de calendário e posições são executados com
+`npm --prefix frontend run test:unit` e no CI. O teste de navegador está em
+`tests/auth-browser/balance-history.spec.ts`; os dois casos de cálculo/API estão
+em `backend/tests/integration/test_manual_transactions.py` (`test_balance_history_*`).
 
 ### Filtrar e pesquisar lançamentos
 
@@ -1543,6 +2051,106 @@ está aberto; uma criação pendente impede abrir nova confirmação. Não há n
 storage, dependência, tabela ou migration. O destino mantém a exigência existente
 de revisão0011; startup não migra nem altera o banco pessoal automaticamente.
 
+### Editar uma transferência
+
+No histórico de **Transferências**, use **Editar transferência** para revisar
+origem, destino, valor, data e descrição. As contas finais precisam ser ativas,
+distintas e próprias, com data posterior à abertura de ambas. A situação
+planejada/efetivada é preservada; não há reversão de situação nesse formulário.
+Para manter uma conta arquivada, reative-a antes de editar.
+
+```http
+PATCH /api/v1/transfers/UUID-DA-TRANSFERENCIA
+If-Match: "ETAG-DA-CONSULTA"
+Content-Type: application/json
+
+{"amount":"250.10","description":"Descrição revisada"}
+```
+
+Exige sessão, origem permitida, CSRF e `If-Match` obtido no GET individual.
+Campos opcionais: `from_account_id`, `to_account_id`, `amount`, `effective_date`
+e `description`. Envie ao menos um; somente `description` aceita `null` para
+limpar o texto. `status` e `user_id` são recusados. A resposta 200 contém os dados
+atuais e novo `ETag`. Dados desatualizados retornam 412; transferência ausente ou
+alheia retorna o mesmo 404; referências/dados inválidos retornam 422.
+
+Uma transferência efetivada de R$ 500,00 entre duas contas de R$ 1.000,00 deixa
+R$ 500,00 e R$ 1.500,00. Corrigir o valor para R$ 250,10 deixa R$ 749,90 e
+R$ 1.250,10. Trocar contas/data remove o efeito das referências antigas e aplica
+o das novas na mesma gravação. Planejadas permanecem fora do saldo real. A linha
+da transferência e sua identidade de criação são preservadas; não surgem receitas,
+despesas ou outra transferência. Repetir a criação original retorna o mesmo ID
+sem desfazer a edição.
+
+Backend bloqueia sessão/usuário, transferência e contas antigas/novas em ordem
+estável; confere o snapshot e grava a alteração de forma atômica. Falha de commit
+preserva os dados e saldos anteriores. A consulta do histórico reinicia sua
+paginação após editar, e valores de saldo anteriores são ocultados.
+
+Conflito ou resultado incerto exige **Recarregar situação**: faz somente GET,
+substitui o rascunho e confere os valores atuais antes de permitir outra gravação.
+Duplo clique é bloqueado; criação e efetivação ficam indisponíveis enquanto a
+edição está aberta. Esse fluxo não cria auditoria imutável de todas as versões
+anteriores. Não há nova migração ou aplicação de schema ao banco pessoal.
+A exclusão de transferências permanece para uma etapa própria.
+
+### Excluir uma transferência
+
+Na área **Transferências**, escolha **Excluir transferência**. A confirmação
+consulta os dados atuais e mostra origem, destino, valor, data e situação. É possível
+cancelar sem enviar a exclusão. Após confirmar, a transferência sai do histórico
+e deixa de participar dos cálculos: efetivadas saem do saldo das duas contas e
+da evolução diária; planejadas saem das projeções. Nenhuma receita ou despesa é
+criada. Contas arquivadas também permitem remover uma transferência existente.
+
+A ação não tem desfazer pela interface. O registro e a identidade original de
+criação permanecem retidos internamente para impedir que uma tentativa antiga de
+cadastro recrie dinheiro. Isso é exclusão lógica, sem apagamento definitivo dos dados.
+
+`DELETE /api/v1/transfers/{id}` exige sessão própria válida, Origin permitido,
+`X-CSRF-Token`, `If-Match` da última consulta e corpo JSON vazio `{}`.
+Retorna `204` sem corpo; repetir a exclusão de um registro já removido também
+retorna `204` para o dono autenticado. Uma versão antiga de um registro ainda
+ativo retorna `412`; é necessário consultar, revisar e confirmar novamente.
+GET/PATCH/efetivação de uma transferência removida retornam `410` para o dono;
+outro usuário recebe `404`. Repetir a criação original retorna `410`, enquanto
+reutilizar a chave com outro conteúdo continua retornando `409`.
+
+Após erro ou resposta perdida, o formulário bloqueia outra exclusão até
+**Recarregar situação** consultar o servidor. Se a transferência já foi removida,
+mostra esse estado sem reenviar DELETE; se ainda existe, mostra os dados atuais
+para uma nova confirmação. Duplo clique não envia duas exclusões. O histórico e
+a consulta de saldo são invalidados após a tentativa e atualizados após confirmação.
+
+### Migração 0012 e verificação no DBeaver
+
+`0012_transfer_deletion`, filha de `0011_transfer_requests`, acrescenta somente
+`transfers.deleted_at` como `TIMESTAMPTZ` nullable. Transferências existentes
+permanecem com marcador nulo; valores, vínculos e chaves de criação são preservados.
+O schema continua com quinze tabelas. O banco de destino precisa dessa revisão
+antes de executar a versão atual. Startup não aplica migrações automaticamente.
+Nenhuma migração é aplicada ao banco pessoal por esta implementação.
+
+Depois de revisar a configuração de destino e aplicar a migração nesse ambiente,
+as consultas abaixo verificam a estrutura sem exibir movimentações financeiras:
+
+```sql
+SELECT current_database();
+SELECT version_num FROM public.alembic_version;
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'transfers'
+  AND column_name = 'deleted_at';
+```
+
+Espere revisão `0012_transfer_deletion` ou posterior e uma coluna `deleted_at`,
+tipo `timestamp with time zone`, `is_nullable = YES`. As consultas são somente
+de leitura. Não remova o marcador manualmente: isso recolocaria a transferência
+nos cálculos. O downgrade recusa remover a coluna enquanto houver registros
+marcados, evitando restauração involuntária de valores; não apaga dados para
+forçar rollback. Nenhuma dependência nova foi adicionada.
+
+
 ### Contrato e repetição segura
 
 `POST /api/v1/transfers` exige sessão viva, origem autorizada, CSRF e
@@ -1660,6 +2268,76 @@ um estado efetivado; consulte-o novamente para obter a posição atual. Enquanto
 houver uma criação financeira pendente, os botões de efetivação ficam desativados.
 Uma falha de commit mantém o lançamento planejado e o saldo inalterados.
 
+## Gerenciar metas pessoais
+
+Em **Metas**, cadastre nome, valor alvo positivo em reais e, opcionalmente, prazo
+e descrição. A meta começa ativa. Consulte a lista paginada ou escolha **Editar meta**
+para revisar nome, valor, prazo, descrição e situação. Campos de data/descrição
+podem ser limpos. A descrição é texto simples de uma linha, sem caracteres de controle.
+
+Concluir, cancelar ou reativar é uma decisão explícita sobre o objetivo. A situação
+não comprova que o valor tenha sido acumulado. Nenhuma dessas ações reserva,
+retira, libera ou movimenta dinheiro; os saldos das contas permanecem iguais.
+Esta entrega inicial da Fase 3 gerencia os objetivos. Reservas, retiradas,
+progresso e saldo livre ainda não estão disponíveis. A política para gastos que
+consomem valores reservados será definida antes de ativar essa parte do módulo.
+Cancelar preserva o registro; não há exclusão física de metas por esta API.
+
+### Contrato de metas e repetição segura
+
+- `POST /api/v1/goals`: JSON com `name` (1–150 caracteres), `target_amount` (string
+  decimal positiva, até 13 inteiros e duas casas), `description` opcional/null
+  (até 2.000 caracteres) e `target_date` ISO opcional/null. Exige sessão própria,
+  Origin permitido, CSRF e `Idempotency-Key` UUIDv4. Retorna201 com ID e Location.
+- `GET /api/v1/goals`: lista somente metas próprias, `limit`1–100, `offset` e filtro
+  opcional `status=active|completed|cancelled`; retorno com `has_more`.
+- `GET /api/v1/goals/{id}`: consulta própria e ETag; alheia/ausente404.
+- `PATCH /api/v1/goals/{id}`: mudanças parciais explícitas nos mesmos campos e
+  situação. Exige CSRF/Origin e `If-Match` da consulta. Versão antiga412; não aceita
+  `user_id` ou campos desconhecidos. Somente descrição/prazo aceitam null.
+
+A chave de criação é persistida por proprietário e hash do conteúdo normalizado.
+Mesma chave e corpo retornam o mesmo ID; corpo diferente retorna409. Repetir o
+cadastro original após editar/concluir/cancelar não restaura os dados antigos.
+Locks transacionais serializam criação e edição com revogação de sessão.
+
+Duplo clique não envia duas criações. Se a resposta do cadastro for incerta, a
+tela preserva a mesma chave e corpo em memória para **Conferir e repetir cadastro
+da meta**. Navegar entre áreas conserva a tentativa durante a sessão; recarregar
+a página a perde. Confira a lista antes de encerrar uma tentativa ou iniciar outra.
+Em conflito/erro de edição, consulte **Recarregar situação da meta** e revise os
+dados atuais antes de confirmar novamente; GET não envia outra alteração.
+
+### Migração 0013 e verificação pelo DBeaver
+
+`0013_goal_creation_requests`, filha de `0012_transfer_deletion`, acrescenta somente
+a tabela técnica `goal_creation_requests`, com chave por dono/UUID e FK composta
+para a meta própria. Preserva metas existentes e não cria alocações. O schema tem
+16 tabelas físicas incluindo `alembic_version`. O destino precisa dessa revisão
+antes de usar a versão atual; startup não migra automaticamente e a implementação
+não aplica migrations ao banco pessoal. Não há dependência nova.
+
+Depois de revisar o destino e migrá-lo, confira somente a estrutura no DBeaver:
+
+```sql
+SELECT current_database();
+SELECT version_num FROM public.alembic_version;
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'goal_creation_requests'
+ORDER BY ordinal_position;
+SELECT conname, contype FROM pg_constraint
+WHERE conrelid = 'public.goal_creation_requests'::regclass
+ORDER BY conname;
+```
+
+Espere revisão `0013_goal_creation_requests` ou posterior, cinco colunas não nulas
+(`user_id`, `idempotency_key`, `request_hash`, `goal_id`, `created_at`), PK composta,
+FKs de usuário/meta própria e checks de chave/hash. Consultas somente de leitura,
+sem exibir objetivos ou movimentações. Downgrade recusa descartar chaves retidas;
+não apague registros para forçar rollback ou perder a proteção de repetição.
+
+
 ## Categorias próprias pela API
 
 `POST /api/v1/categories` cria uma categoria de receita (`income`) ou despesa
@@ -1729,6 +2407,45 @@ O formulário consulta os dados atuais antes de permitir salvar. Se houver confl
 preserva o rascunho, bloqueia o envio e pede para recarregar e revisar os dados.
 Se uma resposta se perder, também exige consultar o estado antes de nova tentativa;
 não repete silenciosamente a alteração. Recarregar substitui o rascunho local.
+
+### Corrigir a posição de abertura de uma conta
+
+Em **Contas**, escolha **Corrigir abertura**. Confira a conta, informe o saldo
+inicial correto (negativo também é válido) e a data da posição, então confirme.
+A posição representa o saldo ao **final do dia** escolhido; movimentos posteriores
+serão calculados a partir dela. A edição comum de nome/tipo e o arquivamento
+continuam separados desta ação.
+
+A correção só altera a posição se não houver nenhum lançamento, transferência
+de entrada ou saída, importação ou reserva vinculada. São considerados também
+planejados, movimentos removidos e importações canceladas ou com falha. Arquivar
+a conta não apaga vínculos nem libera sua abertura. Não é possível usar este
+fluxo para esconder movimentos antigos ou ajustar o saldo atual de uma conta
+já movimentada. Referências históricas existentes permanecem protegidas.
+
+`PATCH /api/v1/accounts/{id}/opening` exige sessão própria, Origin permitido,
+CSRF, `If-Match` da consulta da conta e os dois campos `opening_balance` (string
+decimal exata) e `opening_date` (ISO). Não aceita nome, moeda, estado ou dono.
+Retorna a conta e o novo ETag. Conta alheia/ausente retorna404; snapshot antigo,
+412; tentativa de mudar abertura com vínculos,409, sem alteração. Reenviar os
+mesmos valores atuais, com ETag atual, apenas confirma a posição, mesmo com vínculos.
+
+A verificação e a alteração ocorrem na mesma transação, com os bloqueios de dono
+e conta também usados pelos serviços financeiros. Assim, uma correção concorrente
+com o primeiro movimento não pode invalidar sua data. Serviços futuros de
+importações/reservas devem manter essa coordenação antes de criar vínculos.
+Uma repetição da criação original da conta retorna seu ID e não restaura a
+posição antiga.
+
+Em conflito ou resposta incerta, o formulário bloqueia outro envio até
+**Recarregar dados** consultar a conta atual. A consulta não envia outra correção;
+confira os valores recebidos antes de confirmar novamente. Sair da tela abandona
+apenas o rascunho, sem cancelar uma gravação que já tenha sido concluída.
+
+Sem migração, nova dependência ou alteração automática do banco pessoal. O schema
+atual continua na revisão `0012_transfer_deletion`; contas já usadas mantêm seus
+saldos de abertura protegidos. Consulte o saldo calculado na área **Saldos**.
+
 
 ## Cadastrar, listar e consultar contas próprias
 

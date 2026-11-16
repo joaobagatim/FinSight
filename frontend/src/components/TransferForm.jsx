@@ -56,19 +56,21 @@ export default function TransferForm({
       else {
         onIntent({
           ...pending,
-          conflict: failure.status === 409,
-          uncertain: pending.uncertain || ![403, 422, 429, 409].includes(failure.status),
+          conflict: [409, 410].includes(failure.status),
+          uncertain: pending.uncertain || ![403, 422, 429, 409, 410].includes(failure.status),
           rejected: [403, 422].includes(failure.status),
         })
         setError(
-          failure.status === 409
-            ? 'Esta tentativa tem dados diferentes dos já recebidos. Confira o histórico antes de iniciar outra.'
-            : failure.status === 422
-              ? 'Confira se as duas contas estão ativas, são distintas e se a data é posterior à abertura de ambas.'
-              : errorMessage(
-                  failure,
-                  'Não foi possível confirmar o cadastro. Confira o histórico antes de outra tentativa.',
-                ),
+          failure.status === 410
+            ? 'A transferência desta tentativa foi excluída. A repetição não criou outra. Confira o histórico e encerre esta tentativa.'
+            : failure.status === 409
+              ? 'Esta tentativa tem dados diferentes dos já recebidos. Confira o histórico antes de iniciar outra.'
+              : failure.status === 422
+                ? 'Confira se as duas contas estão ativas, são distintas e se a data é posterior à abertura de ambas.'
+                : errorMessage(
+                    failure,
+                    'Não foi possível confirmar o cadastro. Confira o histórico antes de outra tentativa.',
+                  ),
         )
       }
     } finally {
