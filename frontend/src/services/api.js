@@ -1,3 +1,5 @@
+import { validateBreakdown } from '@/lib/dashboard'
+
 // Cookies stay in the browser; only the session-bound CSRF value is used by JavaScript.
 const sessionEvents =
   typeof BroadcastChannel === 'function' ? new BroadcastChannel('finsight-session-events') : null
@@ -301,14 +303,14 @@ export const api = {
         return submit()
       }
     }),
-  dashboardSummary: (ownerId, scope, dateFrom, dateTo, accountIds = []) =>
+  dashboardBreakdown: (ownerId, scope, dateFrom, dateTo, accountIds = []) =>
     coordinated(async () => {
       const profile = await renewUnlocked()
       if (profile.id !== ownerId) throw new ApiError(401)
       const ids = scope === 'selected' ? [...accountIds].sort() : []
       const query = new URLSearchParams({ scope, date_from: dateFrom, date_to: dateTo })
       ids.forEach((id) => query.append('account_id', id))
-      const result = await send(`/dashboard/summary?${query}`)
+      const result = await send(`/dashboard/breakdown?${query}`)
       if (
         result?.date_from !== dateFrom ||
         result.date_to !== dateTo ||
@@ -333,6 +335,11 @@ export const api = {
         throw new ApiError(0)
       const cents = (value) => BigInt(value.replace('.', ''))
       if (cents(result.income) - cents(result.expense) !== cents(result.net)) throw new ApiError(0)
+      try {
+        validateBreakdown(result)
+      } catch {
+        throw new ApiError(0)
+      }
       return result
     }),
   balanceHistory: (ownerId, accountId, dateFrom, dateTo) =>

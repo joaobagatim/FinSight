@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { api, errorMessage } from '@/services/api'
 import { formatDate, formatMoney } from '@/lib/money'
 import { dayNumber } from '@/lib/balance-history'
+import DashboardData from '@/components/DashboardData'
 
 const scopes = {
   active: 'Contas ativas atualmente',
@@ -51,7 +52,7 @@ export default function DashboardPanel({ ownerId, onExpired }) {
     live.current = true
     const requestVersion = ++version.current
     api
-      .dashboardSummary(ownerId, initial.scope, initial.from, initial.to)
+      .dashboardBreakdown(ownerId, initial.scope, initial.from, initial.to)
       .then((response) => {
         if (current && requestVersion === version.current) setResult({ ...response, names: [] })
       })
@@ -150,7 +151,7 @@ export default function DashboardPanel({ ownerId, onExpired }) {
     setBusy(true)
     const names = accounts.items.filter((a) => filters.ids.includes(a.id)).map((a) => a.name)
     try {
-      const response = await api.dashboardSummary(
+      const response = await api.dashboardBreakdown(
         ownerId,
         filters.scope,
         filters.from,
@@ -328,6 +329,7 @@ export default function DashboardPanel({ ownerId, onExpired }) {
           {result.transaction_count === 0 && (
             <p>Nenhum lançamento efetivado neste período para as contas incluídas.</p>
           )}
+          <DashboardData result={result} />
           <p className="field-hint">
             Referência da consulta: {formatDate(result.as_of)} (São Paulo). Abertura, transferências
             internas, reservas, planejados e lançamentos removidos não compõem estes totais. O saldo
