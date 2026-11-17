@@ -5,11 +5,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError, URLError
+from uuid import uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from sqlalchemy import inspect
 from tools import demo
 from tools.demo_seed import seed_demo
 
@@ -21,9 +23,28 @@ from app.main import create_app
 pytestmark = pytest.mark.postgres
 
 
-def test_demo_seed_recovers_lost_reservation_without_duplicating_money(postgres_settings, tmp_path):
+@pytest.fixture
+def seed_settings(postgres_settings):
     assert postgres_settings.db_name.startswith("finsight_test_")
-    database = Database(postgres_settings)
+    name = "finsight_test_demo_seed_" + uuid4().hex
+    admin = Database(postgres_settings)
+    try:
+        with admin.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            original_tables = set(inspect(connection).get_table_names())
+            connection.exec_driver_sql(f'CREATE DATABASE "{name}"')
+            try:
+                yield postgres_settings.model_copy(update={"db_name": name})
+            finally:
+                assert name.startswith("finsight_test_demo_seed_")
+                connection.exec_driver_sql(f'DROP DATABASE "{name}"')
+                assert set(inspect(connection).get_table_names()) == original_tables
+    finally:
+        admin.dispose()
+
+
+def test_demo_seed_recovers_lost_reservation_without_duplicating_money(seed_settings, tmp_path):
+    assert seed_settings.db_name.startswith("finsight_test_demo_seed_")
+    database = Database(seed_settings)
     config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
     credentials = {
         "DEMO_EMAIL": "seed@example.com",
