@@ -51,3 +51,50 @@ test('reservation failure remains single across panels and clears after recovery
   await expect(page.locator('.reservation-alerts')).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Saldo consolidado', exact: true })).toBeVisible()
 })
+
+test('rapid panel navigation discards obsolete reads instead of blocking the selected panel', async ({
+  page,
+  request,
+}) => {
+  const email = `rapid-navigation-${randomUUID()}@example.com`
+  const password = 'synthetic rapid navigation password'
+  expect(
+    (
+      await privateApi(request).post('http://127.0.0.1:8002/api/v1/auth/register', {
+        data: { name: 'Synthetic Navigation Owner', email, password },
+      })
+    ).status(),
+  ).toBe(200)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Acessar FinSight', exact: true }).click()
+  await page.getByLabel('E-mail', { exact: true }).fill(email)
+  await page.getByLabel('Senha', { exact: true }).fill(password)
+  await page.getByRole('button', { name: 'Entrar', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Suas contas', exact: true })).toBeVisible()
+  await expect(page.getByText('Carregando contas…', { exact: true })).toHaveCount(0)
+  let release = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let meRequests = 0
+  await page.route('**/api/v1/users/me', async (route) => {
+    meRequests++
+    if (meRequests === 1) await gate
+    else await new Promise((resolve) => setTimeout(resolve, 200))
+    await route.continue()
+  })
+  try {
+    await page.getByRole('button', { name: 'Categorias', exact: true }).click()
+    await expect.poll(() => meRequests).toBe(1)
+    for (const name of ['Metas', 'Saldos', 'Contas', 'Categorias', 'Metas', 'Categorias']) {
+      await page.getByRole('button', { name, exact: true }).click()
+    }
+    release()
+    await expect(page.getByRole('heading', { name: 'Suas categorias', exact: true })).toBeVisible()
+    await expect(page.getByText('Carregando categorias…', { exact: true })).toHaveCount(0)
+    expect(meRequests).toBeLessThanOrEqual(3)
+    await expect(page.locator('.reservation-alerts')).toHaveCount(0)
+  } finally {
+    release()
+  }
+})

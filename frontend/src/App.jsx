@@ -10,7 +10,7 @@ import GoalsPanel from './components/GoalsPanel.jsx'
 import ImportsPanel from './components/ImportsPanel.jsx'
 import DashboardPanel from './components/DashboardPanel.jsx'
 import ReservationAlerts from './components/ReservationAlerts.jsx'
-import { api, errorMessage, watchSessionChanges } from '@/services/api'
+import { api, cancelFinancialReads, errorMessage, watchSessionChanges } from '@/services/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
@@ -47,6 +47,8 @@ export default function App() {
   const financialChanged = useCallback(() => setFinancialRevision((value) => value + 1), [])
   const main = useRef(null)
   const authVersion = useRef(0)
+
+  useEffect(() => () => cancelFinancialReads(), [view, user])
 
   useEffect(() => {
     if (view !== 'home') main.current?.focus()
