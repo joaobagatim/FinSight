@@ -34,7 +34,7 @@ Chaves, corpos de criação, data e ETag da intenção de reserva ficam em `.dem
 
 O arquivo UTF-8 **`.demo/import-example.csv`** contém uma entrada fictícia de R$ 250,00 e uma saída de R$ 50,00, com datas relativas à âncora da demo. Não é sobrescrito se você o editar. Em **Importações**, escolha a conta corrente fictícia, envie o arquivo e mapeie `Date`, `Description` e `Amount` (data ISO, ponto decimal). Classifique os registros com categorias compatíveis, selecione os dois e revise as três ciências antes de confirmar. Os dois lançamentos só são criados por essa confirmação explícita; em uma demo intacta, elevam o saldo da conta corrente a R$ 3.954,20. Consulte a posição em data posterior aos registros e não importe novamente sem revisar possíveis duplicatas.
 
-O seed usa **`.demo/seed.lock`** para recusar comandos simultâneos. Se um processo cair e deixar o lock, confirme que nenhuma execução continua ativa antes de removê-lo manualmente; não apague `seed.json`, credenciais ou o volume para resolver isso. O cenário de navegador abaixo pressupõe os dados sintéticos intactos, sem edições financeiras manuais.
+O seed usa **`.demo/seed.lock`** para recusar comandos simultâneos. Se um processo cair e deixar o lock, confirme que nenhuma execução continua ativa antes de removê-lo manualmente; não apague `seed.json`, credenciais ou o volume para resolver isso. O cenário de navegador abaixo pressupõe os dados sintéticos intactos, sem edições financeiras manuais. Se suas consultas rápidas atingirem o limite HTTP 429 ao carregar reservas, o cenário respeita o `Retry-After` e usa o botão de recarregar uma vez; pode aguardar até um minuto nessa etapa.
 
 ```powershell
 # Consultar / repetir o seed (não apaga nem restaura dados editados):
