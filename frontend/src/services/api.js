@@ -46,13 +46,14 @@ function apiUrl(path) {
 
 async function send(
   path,
-  { method = 'GET', data, headers = {}, credentials = 'include', versioned = false } = {},
+  { method = 'GET', data, headers = {}, credentials = 'include', versioned = false, signal } = {},
 ) {
   let response
   try {
     response = await fetch(apiUrl(path), {
       method,
       credentials,
+      signal,
       cache: 'no-store',
       headers: {
         Accept: 'application/json',
@@ -78,12 +79,48 @@ async function send(
 }
 
 let queue = Promise.resolve()
-function coordinated(task) {
-  if (navigator.locks?.request) return navigator.locks.request('finsight-session', task)
+function coordinated(task, signal) {
+  if (navigator.locks?.request)
+    return navigator.locks.request('finsight-session', signal ? { signal } : {}, task)
   // Without cross-tab locks, explicit actions are serialized in this tab; refresh is disabled.
-  const result = queue.then(task, task)
+  const run = () => {
+    signal?.throwIfAborted()
+    return task()
+  }
+  const result = queue.then(run, run)
   queue = result.catch(() => {})
   return result
+}
+
+let financialReads = new AbortController()
+export function cancelFinancialReads() {
+  financialReads.abort()
+  financialReads = new AbortController()
+}
+
+async function coordinatedRead(task) {
+  const { signal } = financialReads
+  // Briefly settle navigation before issuing reads for a transient panel.
+  await new Promise((resolve, reject) => {
+    signal.throwIfAborted()
+    const cancel = () => {
+      clearTimeout(timer)
+      reject(signal.reason)
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', cancel)
+      resolve()
+    }, 200)
+    signal.addEventListener('abort', cancel, { once: true })
+  })
+  return coordinated(
+    () =>
+      task({
+        read: (path, options) => send(path, { ...options, signal }),
+        renew: () => renewUnlocked(signal),
+      }),
+    signal,
+  )
 }
 
 async function bootstrap() {
@@ -96,16 +133,19 @@ async function bootstrap() {
   return data.csrf_token
 }
 
-async function renewUnlocked() {
+async function renewUnlocked(signal) {
   try {
-    return await send('/users/me')
+    return await send('/users/me', { signal })
   } catch (error) {
     if (error.status !== 401) throw error
   }
   if (!navigator.locks?.request) throw new ApiError(401)
+  signal?.throwIfAborted()
   const csrf = await bootstrap()
+  signal?.throwIfAborted()
+  // Once refresh is submitted, finish it under the session lock even if navigation changes.
   await send('/auth/refresh', { method: 'POST', data: {}, headers: { 'X-CSRF-Token': csrf } })
-  return send('/users/me')
+  return send('/users/me', { signal })
 }
 
 async function authenticatedRead(path) {
@@ -182,10 +222,10 @@ export const api = {
       }
     }),
   goal: (ownerId, id) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/goals/${encodeURIComponent(id)}`, { versioned: true })
+      const result = await read(`/goals/${encodeURIComponent(id)}`, { versioned: true })
       if (
         result.data?.id !== id ||
         !['active', 'completed', 'cancelled'].includes(result.data.status)
@@ -221,10 +261,10 @@ export const api = {
       }
     }),
   goals: (ownerId, offset = 0) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/goals?limit=50&offset=${offset}`)
+      const result = await read(`/goals?limit=50&offset=${offset}`)
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
     }),
@@ -304,13 +344,13 @@ export const api = {
       }
     }),
   dashboardBreakdown: (ownerId, scope, dateFrom, dateTo, accountIds = []) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
       const ids = scope === 'selected' ? [...accountIds].sort() : []
       const query = new URLSearchParams({ scope, date_from: dateFrom, date_to: dateTo })
       ids.forEach((id) => query.append('account_id', id))
-      const result = await send(`/dashboard/breakdown?${query}`)
+      const result = await read(`/dashboard/breakdown?${query}`)
       if (
         result?.date_from !== dateFrom ||
         result.date_to !== dateTo ||
@@ -343,15 +383,15 @@ export const api = {
       return result
     }),
   balanceHistory: (ownerId, accountId, dateFrom, dateTo) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
       const query = new URLSearchParams({ date_from: dateFrom, date_to: dateTo })
-      return send(`/accounts/${encodeURIComponent(accountId)}/balance/history?${query}`)
+      return read(`/accounts/${encodeURIComponent(accountId)}/balance/history?${query}`)
     }),
   projectedBalance: (ownerId, scope, baseDate, targetDate, overduePolicy, accountIds) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
       const query = new URLSearchParams({
         scope,
@@ -360,21 +400,21 @@ export const api = {
         overdue_policy: overduePolicy,
       })
       if (scope === 'selected') accountIds.forEach((id) => query.append('account_id', id))
-      return send(`/accounts/balances/projected?${query}`)
+      return read(`/accounts/balances/projected?${query}`)
     }),
   consolidatedBalance: (ownerId, scope, asOf, accountIds) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
       const query = new URLSearchParams({ scope, as_of: asOf })
       if (scope === 'selected') accountIds.forEach((id) => query.append('account_id', id))
-      return send(`/accounts/balances/consolidated?${query}`)
+      return read(`/accounts/balances/consolidated?${query}`)
     }),
   transfer: (ownerId, id) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/transfers/${encodeURIComponent(id)}`, { versioned: true })
+      const result = await read(`/transfers/${encodeURIComponent(id)}`, { versioned: true })
       if (result.data?.id !== id || !['planned', 'posted'].includes(result.data.status))
         throw new ApiError(0)
       return result
@@ -403,10 +443,10 @@ export const api = {
       }
     }),
   transfers: (ownerId, offset = 0) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/transfers?limit=50&offset=${offset}`)
+      const result = await read(`/transfers?limit=50&offset=${offset}`)
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
     }),
@@ -437,10 +477,10 @@ export const api = {
       }
     }),
   transaction: (ownerId, id) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/transactions/${encodeURIComponent(id)}`, { versioned: true })
+      const result = await read(`/transactions/${encodeURIComponent(id)}`, { versioned: true })
       if (result.data?.id !== id || !['planned', 'posted'].includes(result.data.status))
         throw new ApiError(0)
       return result
@@ -513,8 +553,8 @@ export const api = {
       }
     }),
   transactions: (ownerId, offset = 0, filters = {}) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
       const query = new URLSearchParams({ limit: '50', offset: String(offset) })
       for (const field of [
@@ -528,15 +568,15 @@ export const api = {
       ]) {
         if (filters[field]) query.set(field, filters[field])
       }
-      const result = await send(`/transactions?${query}`)
+      const result = await read(`/transactions?${query}`)
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
     }),
   balance: (ownerId, id, asOf) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      return send(`/accounts/${encodeURIComponent(id)}/balance?as_of=${encodeURIComponent(asOf)}`)
+      return read(`/accounts/${encodeURIComponent(id)}/balance?as_of=${encodeURIComponent(asOf)}`)
     }),
   createTransaction: (ownerId, data, key) =>
     coordinated(async () => {
@@ -565,18 +605,18 @@ export const api = {
       }
     }),
   categories: (ownerId, offset = 0) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/categories?limit=50&offset=${offset}`)
+      const result = await read(`/categories?limit=50&offset=${offset}`)
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
     }),
   category: (ownerId, id) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      return send(`/categories/${encodeURIComponent(id)}`, { versioned: true })
+      return read(`/categories/${encodeURIComponent(id)}`, { versioned: true })
     }),
   saveCategory: (ownerId, data, id, etag) =>
     coordinated(async () => {
@@ -590,10 +630,10 @@ export const api = {
       })
     }),
   account: (ownerId, id) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      return send(`/accounts/${encodeURIComponent(id)}`, { versioned: true })
+      return read(`/accounts/${encodeURIComponent(id)}`, { versioned: true })
     }),
   updateAccount: (ownerId, id, data, etag) =>
     coordinated(async () => {
@@ -616,10 +656,10 @@ export const api = {
       }
     }),
   accounts: (ownerId, offset = 0) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/accounts?limit=50&offset=${offset}`)
+      const result = await read(`/accounts?limit=50&offset=${offset}`)
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
     }),
@@ -643,16 +683,16 @@ export const api = {
       }
     }),
   goalFunding: (ownerId, goalId) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      return send(`/goals/${encodeURIComponent(goalId)}/funding`)
+      return read(`/goals/${encodeURIComponent(goalId)}/funding`)
     }),
   allocationContext: (ownerId, goalId, accountId) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(
+      const result = await read(
         `/goals/${encodeURIComponent(goalId)}/allocation-context?account_id=${encodeURIComponent(accountId)}`,
         { versioned: true },
       )
@@ -664,20 +704,20 @@ export const api = {
       return result
     }),
   allocations: (ownerId, goalId, offset = 0) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(
+      const result = await read(
         `/goals/${encodeURIComponent(goalId)}/allocations?limit=50&offset=${offset}`,
       )
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
     }),
   reservationAlerts: (ownerId) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send('/reservations/alerts')
+      const result = await read('/reservations/alerts')
       if (
         !Array.isArray(result?.items) ||
         !Number.isSafeInteger(result?.account_count) ||
@@ -764,34 +804,34 @@ export const api = {
       }
     }),
   imports: (ownerId, offset = 0) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/imports?limit=50&offset=${offset}`)
+      const result = await read(`/imports?limit=50&offset=${offset}`)
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
     }),
   importJob: (ownerId, id) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/imports/${encodeURIComponent(id)}`)
+      const result = await read(`/imports/${encodeURIComponent(id)}`)
       if (result?.id !== id) throw new ApiError(0)
       return result
     }),
   importRows: (ownerId, id, offset = 0) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/imports/${encodeURIComponent(id)}/rows?limit=50&offset=${offset}`)
+      const result = await read(`/imports/${encodeURIComponent(id)}/rows?limit=50&offset=${offset}`)
       if (!Array.isArray(result?.items)) throw new ApiError(0)
       return result
     }),
   importConfirmation: (ownerId, jobId) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/imports/${encodeURIComponent(jobId)}/confirmation`, {
+      const result = await read(`/imports/${encodeURIComponent(jobId)}/confirmation`, {
         versioned: true,
       })
       if (
@@ -830,18 +870,18 @@ export const api = {
       }
     }),
   importDuplicates: (ownerId, jobId) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(`/imports/${encodeURIComponent(jobId)}/duplicates`)
+      const result = await read(`/imports/${encodeURIComponent(jobId)}/duplicates`)
       if (result?.job_id !== jobId || !Array.isArray(result.items)) throw new ApiError(0)
       return result
     }),
   importRow: (ownerId, jobId, rowId) =>
-    coordinated(async () => {
-      const profile = await renewUnlocked()
+    coordinatedRead(async ({ read, renew }) => {
+      const profile = await renew()
       if (profile.id !== ownerId) throw new ApiError(401)
-      const result = await send(
+      const result = await read(
         `/imports/${encodeURIComponent(jobId)}/rows/${encodeURIComponent(rowId)}`,
         { versioned: true },
       )
