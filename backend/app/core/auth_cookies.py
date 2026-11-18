@@ -45,7 +45,7 @@ class AuthCookies:
             if (
                 settings.environment not in {"development", "test"}
                 or request.url.scheme not in {"http", "https"}
-                or request.url.hostname not in {"localhost", "127.0.0.1", "::1"}
+                or request.url.hostname not in {"localhost", "127.0.0.1", "127.0.0.2", "::1"}
                 or not local_peer
             ):
                 raise CookiePolicyRejected()

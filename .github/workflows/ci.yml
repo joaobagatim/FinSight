@@ -61,6 +61,11 @@ jobs:
         run: |
           backend/.venv/bin/python -m ruff check backend
           backend/.venv/bin/python -m ruff format --check backend
+      - name: Check isolated demo safeguards without Docker
+        run: |
+          backend/.venv/bin/python -m ruff check --config backend/pyproject.toml tools
+          backend/.venv/bin/python -m ruff format --config backend/pyproject.toml --check tools
+          backend/.venv/bin/python -m pytest tools/test_demo.py -q
       - name: Run backend tests with PostgreSQL
         run: >-
           backend/.venv/bin/python -m pytest -c backend/pyproject.toml backend/tests

@@ -1,5 +1,7 @@
 # FinSight
 
+Para experimentar com dados fictícios e banco isolado, consulte [Demonstração local](docs/demo.md). A configuração de demonstração mantém o banco, os volumes e o `.env` pessoais separados.
+
 FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React, Python (FastAPI) e PostgreSQL. Permite controlar receitas e despesas, importar extratos bancários, visualizar dashboards interativos, analisar tendências financeiras e planejar metas com projeções inteligentes.
 
 ## Desenvolvimento
@@ -7,6 +9,9 @@ FinSight é uma plataforma de gestão financeira pessoal desenvolvida com React,
 O [roteiro integrado do MVP](docs/mvp-walkthrough.md) explica um fluxo completo
 com dados fictícios: cadastro, conta, CSV revisado, dashboard, saldo e reserva de
 meta, com valores esperados e um cenário de navegador reproduzível.
+
+A [referência de desempenho](docs/performance.md) registra medições locais
+reproduzíveis de API, dashboard e prévia CSV, com ambiente e limitações explícitos.
 
 ### Indicadores no dashboard
 

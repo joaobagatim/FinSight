@@ -35,6 +35,16 @@ def cookies(response):
     return result
 
 
+def test_demo_loopback_keeps_host_only_scope_and_rejects_remote_peer():
+    settings = Settings(_env_file=None, auth_cookie_secure=False)
+    policy = AuthCookies(settings, request(scheme="http", host="127.0.0.2", peer="127.0.0.1"))
+    response = Response()
+    policy.clear(response)
+    assert all(item["domain"] == "" for item in cookies(response).values())
+    with pytest.raises(CookiePolicyRejected):
+        AuthCookies(settings, request(scheme="http", host="127.0.0.2", peer="192.0.2.1"))
+
+
 def grant(now):
     return SessionGrant(
         context=AuthContext(
