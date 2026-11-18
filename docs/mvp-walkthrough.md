@@ -75,9 +75,8 @@ descartáveis próprios e não usa o banco pessoal. Para executar apenas esse fl
 npm run test:auth -- --project=session-browser tests/auth-browser/mvp-journey.spec.ts
 ```
 
-O ambiente de demonstração do [PR #31](https://github.com/joaobagatim/FinSight/pull/31)
-é uma entrega separada, ainda não integrada à `main` no momento desta auditoria.
-Consulte [Demonstração local](demo.md) para a versão sincronizada, as instruções
-de acesso e a preservação dos dados. Executar a demo com o código atualizado
-não equivale a uma publicação em produção. A medição de desempenho em referência
-definida continua pendente; tempos de testes não constituem benchmark nem SLA.
+Consulte [Demonstração local](demo.md) para experimentar esse fluxo em ambiente
+isolado, com instruções de acesso e preservação dos dados. A demo foi validada
+com contas, meta/reserva, CSV e dashboard pela interface. Executá-la localmente
+não equivale a uma publicação em produção. A [referência de desempenho](performance.md)
+registra medições HTTP específicas; tempos de testes não constituem benchmark.
