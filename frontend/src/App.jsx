@@ -302,7 +302,7 @@ export default function App() {
                 </p>
               )}
               <ReservationAlerts
-                key={user.id}
+                key={`reservation-alerts:${user.id}`}
                 ownerId={user.id}
                 revision={`${view}:${financialRevision}`}
                 onExpired={expired}
